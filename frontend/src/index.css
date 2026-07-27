@@ -1,0 +1,56 @@
+@import "tldraw/tldraw.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+/* Theme variables and utilities */
+:root {
+  --color-bg-primary: #ffffff;
+  --color-text-primary: #111827;
+  --color-border-primary: #e5e7eb;
+  --color-sidebar-bg: #f9fafb;
+}
+
+:root.dark {
+  --color-bg-primary: #0b0f19;
+  --color-text-primary: #f3f4f6;
+  --color-border-primary: #1f2937;
+  --color-sidebar-bg: #111827;
+}
+
+/* Custom Scrollbar for list pages */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+:root.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}

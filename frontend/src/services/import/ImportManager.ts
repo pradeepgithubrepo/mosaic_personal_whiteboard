@@ -1,0 +1,167 @@
+import { Importer, ImportAnalysis, ImportLog } from './Importer'
+import { StorageProvider, Board } from '../../types'
+import { BoardRepository } from '../../storage/BoardRepository'
+import { ImageImporter } from './importers/ImageImporter'
+import { SVGImporter } from './importers/SVGImporter'
+import { PDFImporter } from './importers/PDFImporter'
+import { HtmlImporter } from './html/HtmlImporter'
+import { MipImporter } from './importers/MipImporter'
+
+export class ImportManager {
+  private static importers: Importer[] = [
+    new MipImporter(),   // MIP v1.0 ZIP package first
+    new HtmlImporter(),  // HTML first — most specific
+    new ImageImporter(),
+    new SVGImporter(),
+    new PDFImporter()
+  ]
+
+  // Registers a new importer (future-proof extensible design)
+  public static registerImporter(importer: Importer): void {
+    const exists = this.importers.some((i) => i.name === importer.name)
+    if (!exists) {
+      this.importers.unshift(importer) // Add to start to allow overrides
+    }
+  }
+
+  public static getImporter(file: File): Importer | null {
+    return this.importers.find((i) => i.supports(file)) || null
+  }
+
+  public static async analyzeFile(file: File): Promise<ImportAnalysis> {
+    const importer = this.getImporter(file)
+    if (!importer) {
+      return {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type,
+        isValid: false,
+        error: `Unsupported file format. Only PNG, JPEG, SVG, and PDF are supported.`,
+      }
+    }
+    try {
+      return await importer.analyze(file)
+    } catch (e: any) {
+      return {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type,
+        isValid: false,
+        error: `Analysis failed: ${e.message}`,
+      }
+    }
+  }
+
+  public static async importFile(
+    file: File,
+    onProgress: (phase: string, percent: number) => void,
+    storage: StorageProvider,
+    repository: BoardRepository
+  ): Promise<Board> {
+    const startTime = Date.now()
+    const importer = this.getImporter(file)
+    if (!importer) {
+      throw new Error(`Unsupported file type: ${file.name}`)
+    }
+
+    let boardId = crypto.randomUUID()
+    let elements: any = null
+    let errorMsg = ''
+    let assetsCount = 0
+
+    try {
+      onProgress('Preparing Workspace...', 5)
+      // Run importer which returns serialized elements snapshot
+      elements = await importer.import(file, (phase, pct) => {
+        onProgress(phase, 10 + pct * 0.8) // map importer progress to 10% - 90% range
+      }, storage)
+
+      onProgress('Generating Whiteboard...', 92)
+      // Count assets from ImportResult format
+      if (elements && Array.isArray(elements.importedAssets)) {
+        assetsCount = elements.importedAssets.length
+      }
+
+      const now = new Date().toISOString()
+      const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
+      
+      const importedBoard: Board = {
+        id: boardId,
+        title: title,
+        createdAt: now,
+        updatedAt: now,
+        elements: elements,
+        metadata: {
+          description: `Imported from ${file.name} (${importer.name})`,
+          tags: ['imported', importer.name.toLowerCase()],
+        },
+      }
+
+      // Add custom migration fields (as requested)
+      const boardWithMigrationMeta = {
+        ...importedBoard,
+        source: 'Microsoft Whiteboard',
+        importType: importer.name,
+        schemaVersion: 1,
+      } as Board
+
+      onProgress('Saving to Storage...', 95)
+      // Save board via repository
+      await repository.save(boardWithMigrationMeta)
+      
+      onProgress('Completed', 100)
+      
+      this.logImport({
+        id: crypto.randomUUID(),
+        importDate: now,
+        originalFileName: file.name,
+        importType: importer.name,
+        boardId: boardId,
+        assetsCount,
+        durationMs: Date.now() - startTime,
+        status: 'success',
+      })
+
+      return boardWithMigrationMeta
+    } catch (e: any) {
+      errorMsg = e.message || 'Import failed midway.'
+      this.logImport({
+        id: crypto.randomUUID(),
+        importDate: new Date().toISOString(),
+        originalFileName: file.name,
+        importType: importer.name,
+        boardId: '',
+        assetsCount: 0,
+        durationMs: Date.now() - startTime,
+        status: 'failed',
+        error: errorMsg,
+      })
+      throw e
+    }
+  }
+
+  // Logs imports into localstorage
+  private static logImport(entry: ImportLog): void {
+    const logsStr = localStorage.getItem('whiteboard_import_logs')
+    let logs: ImportLog[] = []
+    if (logsStr) {
+      try {
+        logs = JSON.parse(logsStr)
+      } catch {
+        logs = []
+      }
+    }
+    logs.unshift(entry)
+    localStorage.setItem('whiteboard_import_logs', JSON.stringify(logs))
+  }
+
+  public static getImportLogs(): ImportLog[] {
+    const logsStr = localStorage.getItem('whiteboard_import_logs')
+    if (!logsStr) return []
+    try {
+      return JSON.parse(logsStr)
+    } catch {
+      return []
+    }
+  }
+}
