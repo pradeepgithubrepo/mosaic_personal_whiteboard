@@ -32,10 +32,10 @@ export const AuthCallback: React.FC = () => {
       try {
         const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
         const clientSecret = import.meta.env.VITE_GOOGLE_CLIENT_SECRET
-        const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI
+        const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/auth/callback`
 
-        if (!clientId || !clientSecret || !redirectUri) {
-          throw new Error('Google OAuth credentials are not configured in .env file.')
+        if (!clientId || !clientSecret) {
+          throw new Error('Google OAuth credentials are not configured in environment variables.')
         }
 
         const params = new URLSearchParams()

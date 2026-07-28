@@ -215,10 +215,10 @@ export class GoogleDriveProvider implements StorageProvider {
   // Redirect user to Google Sign-In consent screen
   public async authenticate(): Promise<void> {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
-    const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI
+    const redirectUri = import.meta.env.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/auth/callback`
 
-    if (!clientId || !redirectUri) {
-      throw new Error('Google OAuth credentials not configured in environment.')
+    if (!clientId) {
+      throw new Error('Google OAuth client ID not configured in environment.')
     }
 
     const scope = 'https://www.googleapis.com/auth/drive.file email profile'
