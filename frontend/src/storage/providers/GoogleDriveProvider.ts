@@ -105,6 +105,7 @@ export class GoogleDriveProvider implements StorageProvider {
   }
 
   // Find or create Mosaic workspace
+  // Find or leverage existing Mosaic workspace, constructing required subfolders inside it
   public async initializeWorkspace(): Promise<CachedFolderIds> {
     if (this.cachedFolders) return this.cachedFolders
 
@@ -113,7 +114,7 @@ export class GoogleDriveProvider implements StorageProvider {
     if (cached) {
       try {
         const parsed = JSON.parse(cached)
-        // Verify they actually exist in Drive before returning
+        // Verify root folder actually exists in Drive before returning
         await this.apiCall(`https://www.googleapis.com/drive/v3/files/${parsed.rootFolderId}?fields=id`)
         this.cachedFolders = parsed
         return parsed
@@ -122,61 +123,57 @@ export class GoogleDriveProvider implements StorageProvider {
       }
     }
 
-    console.log('Searching for Mosaic workspace marker (.mosaic)...')
-    const markerId = await this.findRootFolder()
+    console.log('Searching for existing Mosaic folder in Google Drive...')
+    let rootFolderId = await this.findRootFolder()
 
-    if (markerId) {
-      // Workspace exists. Locate parent folder and subdirectories
-      try {
-        const res = await this.apiCall(
-          `https://www.googleapis.com/drive/v3/files/${markerId}?fields=id,parents`
-        )
-        const fileMeta = await res.json()
-        const rootFolderId = fileMeta.parents?.[0]
-
-        if (!rootFolderId) throw new Error('Marker file has no parent directory.')
-
-        // List directories inside root
-        const listRes = await this.apiCall(
-          `https://www.googleapis.com/drive/v3/files?q='${rootFolderId}'+in+parents+and+mimeType%3D'application/vnd.google-apps.folder'+and+trashed%3Dfalse&fields=files(id,name)`
-        )
-        const listData = await listRes.json()
-        const folders = listData.files || []
-
-        const boardsFolder = folders.find((f: any) => f.name === 'Boards')
-        const imagesFolder = folders.find((f: any) => f.name === 'Images')
-        const exportsFolder = folders.find((f: any) => f.name === 'Exports')
-
-        if (boardsFolder && imagesFolder && exportsFolder) {
-          const cache: CachedFolderIds = {
-            rootFolderId,
-            markerFileId: markerId,
-            boardsFolderId: boardsFolder.id,
-            imagesFolderId: imagesFolder.id,
-            exportsFolderId: exportsFolder.id,
-          }
-          this.cachedFolders = cache
-          localStorage.setItem('whiteboard_gdrive_folder_cache', JSON.stringify(cache))
-          console.log('Existing Mosaic workspace discovered and loaded:', cache)
-          return cache
-        }
-      } catch (e) {
-        console.warn('Workspace parent validation failed, recreating...', e)
-      }
+    if (!rootFolderId) {
+      console.log('No existing Mosaic folder found. Creating root Mosaic folder...')
+      rootFolderId = await this.createFolder('Mosaic')
+    } else {
+      console.log(`Leveraging existing Mosaic folder: ${rootFolderId}`)
     }
 
-    // Workspace not found or invalid. Create it.
-    console.log('Creating fresh Mosaic workspace...')
-    const rootFolderId = await this.createRootFolder()
-    
-    // Create subfolders
-    const boardsFolderId = await this.createFolder('Boards', rootFolderId)
-    const imagesFolderId = await this.createFolder('Images', rootFolderId)
-    const exportsFolderId = await this.createFolder('Exports', rootFolderId)
+    // List all non-trashed items inside the root folder
+    const listQuery = encodeURIComponent(`'${rootFolderId}' in parents and trashed = false`)
+    const listRes = await this.apiCall(
+      `https://www.googleapis.com/drive/v3/files?q=${listQuery}&fields=files(id,name,mimeType)&spaces=drive`
+    )
+    const listData = await listRes.json()
+    const items: Array<{ id: string; name: string; mimeType?: string }> = listData.files || []
 
-    // Create marker file
-    const markerContent = JSON.stringify({ app: 'Mosaic', version: 1 })
-    const markerFileId = await this.uploadFile(rootFolderId, '.mosaic', 'application/json', markerContent)
+    // Locate or create Boards subfolder
+    const boardsFolder = items.find(
+      (item) => item.mimeType === 'application/vnd.google-apps.folder' && item.name === 'Boards'
+    )
+    const boardsFolderId = boardsFolder
+      ? boardsFolder.id
+      : await this.createFolder('Boards', rootFolderId)
+
+    // Locate or create Images subfolder
+    const imagesFolder = items.find(
+      (item) => item.mimeType === 'application/vnd.google-apps.folder' && item.name === 'Images'
+    )
+    const imagesFolderId = imagesFolder
+      ? imagesFolder.id
+      : await this.createFolder('Images', rootFolderId)
+
+    // Locate or create Exports subfolder
+    const exportsFolder = items.find(
+      (item) => item.mimeType === 'application/vnd.google-apps.folder' && item.name === 'Exports'
+    )
+    const exportsFolderId = exportsFolder
+      ? exportsFolder.id
+      : await this.createFolder('Exports', rootFolderId)
+
+    // Locate or create .mosaic marker file inside rootFolderId
+    const markerFile = items.find((item) => item.name === '.mosaic')
+    let markerFileId: string
+    if (markerFile) {
+      markerFileId = markerFile.id
+    } else {
+      const markerContent = JSON.stringify({ app: 'Mosaic', version: 1 })
+      markerFileId = await this.uploadFile(rootFolderId, '.mosaic', 'application/json', markerContent)
+    }
 
     const cache: CachedFolderIds = {
       rootFolderId,
@@ -188,7 +185,7 @@ export class GoogleDriveProvider implements StorageProvider {
 
     this.cachedFolders = cache
     localStorage.setItem('whiteboard_gdrive_folder_cache', JSON.stringify(cache))
-    console.log('Mosaic workspace successfully created:', cache)
+    console.log('Mosaic workspace successfully initialized and cached:', cache)
     return cache
   }
 
@@ -231,18 +228,44 @@ export class GoogleDriveProvider implements StorageProvider {
     window.location.href = authUrl
   }
 
-  // Returns marker file ID if found
+  // Returns root Mosaic folder ID if found (checking folder name 'Mosaic' first, then '.mosaic' marker)
   public async findRootFolder(): Promise<string | null> {
-    const query = encodeURIComponent("name = '.mosaic' and mimeType = 'application/json' and trashed = false")
-    const res = await this.apiCall(
-      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,parents)&spaces=drive`
+    // 1. Search for existing folder named 'Mosaic'
+    const folderQuery = encodeURIComponent(
+      "name = 'Mosaic' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     )
-    const data = await res.json()
-    const files = data.files || []
-    return files.length > 0 ? files[0].id : null
+    const folderRes = await this.apiCall(
+      `https://www.googleapis.com/drive/v3/files?q=${folderQuery}&fields=files(id,name)&spaces=drive`
+    )
+    const folderData = await folderRes.json()
+    const mosaicFolders = folderData.files || []
+
+    if (mosaicFolders.length > 0) {
+      return mosaicFolders[0].id
+    }
+
+    // 2. Search for '.mosaic' marker file in case parent folder was renamed
+    const markerQuery = encodeURIComponent(
+      "name = '.mosaic' and mimeType = 'application/json' and trashed = false"
+    )
+    const markerRes = await this.apiCall(
+      `https://www.googleapis.com/drive/v3/files?q=${markerQuery}&fields=files(id,parents)&spaces=drive`
+    )
+    const markerData = await markerRes.json()
+    const markerFiles = markerData.files || []
+
+    if (markerFiles.length > 0 && markerFiles[0].parents?.[0]) {
+      return markerFiles[0].parents[0]
+    }
+
+    return null
   }
 
   public async createRootFolder(): Promise<string> {
+    const existingId = await this.findRootFolder()
+    if (existingId) {
+      return existingId
+    }
     return this.createFolder('Mosaic')
   }
 
