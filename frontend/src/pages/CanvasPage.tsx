@@ -16,39 +16,45 @@ async function applyImportResult(editor: Editor, result: ImportResult) {
   const { importedAssets, importedShapes } = result
 
   // 1. Register one TLImageAsset per uploaded file
-  const tlAssets = importedAssets.map((a) => ({
-    id: `asset:${a.assetId}` as any,
-    typeName: 'asset' as const,
-    type: 'image' as const,
-    props: {
-      name: a.fileName,
-      src: a.src,           // blob URL — valid for current session
-      w: a.width,
-      h: a.height,
-      mimeType: a.mimeType,
-      isAnimated: false,
-    },
-    meta: {
-      storageAssetId: a.assetId, // store original ID for future reload
-    },
-  }))
+  const tlAssets = importedAssets.map((a) => {
+    const cleanStorageId = a.assetId.replace(/^asset-id:\/\//, '')
+    return {
+      id: `asset:${cleanStorageId}` as any,
+      typeName: 'asset' as const,
+      type: 'image' as const,
+      props: {
+        name: a.fileName,
+        src: a.src, // blob URL — valid for current session
+        w: a.width,
+        h: a.height,
+        mimeType: a.mimeType,
+        isAnimated: false,
+      },
+      meta: {
+        storageAssetId: cleanStorageId, // store original ID for future reload
+      },
+    }
+  })
 
   editor.createAssets(tlAssets)
 
   // 2. Create one locked image shape per asset
-  const tlShapes = importedShapes.map((s) => ({
-    type: 'image' as const,
-    x: s.x,
-    y: s.y,
-    rotation: s.rotation || 0,
-    isLocked: true,
-    props: {
-      assetId: `asset:${s.assetId}` as any,
-      w: s.width,
-      h: s.height,
-    },
-    meta: s.meta || {},
-  }))
+  const tlShapes = importedShapes.map((s) => {
+    const cleanStorageId = s.assetId.replace(/^asset-id:\/\//, '')
+    return {
+      type: 'image' as const,
+      x: s.x,
+      y: s.y,
+      rotation: s.rotation || 0,
+      isLocked: true,
+      props: {
+        assetId: `asset:${cleanStorageId}` as any,
+        w: s.width,
+        h: s.height,
+      },
+      meta: s.meta || {},
+    }
+  })
 
   editor.createShapes(tlShapes)
 
@@ -63,17 +69,23 @@ async function resolveSnapshotAssets(snapshot: any, downloadAsset: (id: string) 
     const record = store[key]
     if (record?.typeName === 'asset' && record?.type === 'image') {
       const src: string = record.props?.src || ''
+      // If src is already a valid blob or HTTP URL, keep it intact
+      if (src.startsWith('blob:') || src.startsWith('data:') || src.startsWith('http://') || src.startsWith('https://')) {
+        return
+      }
       // Resolve both asset-id:// (new scheme) and storageAssetId meta
-      const storageId: string =
-        record.meta?.storageAssetId ||
-        (src.startsWith('asset-id://') ? src.replace('asset-id://', '') : null)
+      let storageId: string | null = record.meta?.storageAssetId || null
+      if (!storageId && src.startsWith('asset-id://')) {
+        storageId = src.replace('asset-id://', '')
+      }
       if (storageId) {
+        const cleanStorageId = storageId.replace(/^asset-id:\/\//, '')
         try {
-          const blob = await downloadAsset(storageId)
+          const blob = await downloadAsset(cleanStorageId)
           record.props.src = URL.createObjectURL(blob)
-          record.meta = { ...record.meta, storageAssetId: storageId }
+          record.meta = { ...record.meta, storageAssetId: cleanStorageId }
         } catch (err) {
-          console.warn(`Could not resolve asset ${storageId}:`, err)
+          console.warn(`Could not resolve asset ${cleanStorageId}:`, err)
         }
       }
     }
@@ -84,14 +96,22 @@ async function resolveSnapshotAssets(snapshot: any, downloadAsset: (id: string) 
 
 // Strip blob: URLs back to asset-id:// before persistence
 function cleanSnapshotForStorage(snapshot: any): any {
+  if (!snapshot) return snapshot
   const clean = JSON.parse(JSON.stringify(snapshot))
   const store = clean?.store || {}
   Object.keys(store).forEach((key) => {
     const record = store[key]
     if (record?.typeName === 'asset' && record?.type === 'image') {
-      const storageId = record.meta?.storageAssetId
-      if (storageId && record.props?.src?.startsWith('blob:')) {
-        record.props.src = `asset-id://${storageId}`
+      let storageId = record.meta?.storageAssetId
+      if (!storageId && record.props?.src?.startsWith('asset-id://')) {
+        storageId = record.props.src.replace('asset-id://', '')
+      }
+      if (storageId) {
+        const cleanStorageId = storageId.replace(/^asset-id:\/\//, '')
+        record.meta = { ...record.meta, storageAssetId: cleanStorageId }
+        if (record.props?.src?.startsWith('blob:')) {
+          record.props.src = `asset-id://${cleanStorageId}`
+        }
       }
     }
   })
@@ -108,7 +128,9 @@ export const CanvasPage: React.FC = () => {
   // Sync route param with active board selection
   useEffect(() => {
     if (id) {
-      selectBoard(id)
+      if (!activeBoard || activeBoard.id !== id) {
+        selectBoard(id)
+      }
     } else {
       const lastActiveId = localStorage.getItem('whiteboard_last_active_id')
       if (lastActiveId && boards.some((b) => b.id === lastActiveId)) {
@@ -117,7 +139,7 @@ export const CanvasPage: React.FC = () => {
         navigate(`/board/${boards[0].id}`, { replace: true })
       }
     }
-  }, [id, boards.length])
+  }, [id, boards.length, activeBoard?.id])
 
   // Cleanup store listener on board change / unmount
   useEffect(() => {

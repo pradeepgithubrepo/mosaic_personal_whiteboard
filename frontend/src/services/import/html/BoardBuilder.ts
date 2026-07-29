@@ -25,19 +25,17 @@ async function sha256(blob: Blob): Promise<string> {
     .join('')
 }
 
-// Persistent checksum → assetId cache in localStorage
-const CHECKSUM_KEY = 'whiteboard_asset_checksums'
-
-function loadChecksumIndex(): Record<string, string> {
+// Persistent checksum → assetId cache in localStorage (scoped per storage provider)
+function loadChecksumIndex(providerName: string): Record<string, string> {
   try {
-    return JSON.parse(localStorage.getItem(CHECKSUM_KEY) || '{}')
+    return JSON.parse(localStorage.getItem(`whiteboard_asset_checksums_${providerName}`) || '{}')
   } catch {
     return {}
   }
 }
 
-function saveChecksumIndex(index: Record<string, string>) {
-  localStorage.setItem(CHECKSUM_KEY, JSON.stringify(index))
+function saveChecksumIndex(providerName: string, index: Record<string, string>) {
+  localStorage.setItem(`whiteboard_asset_checksums_${providerName}`, JSON.stringify(index))
 }
 
 // ─── Blob resolution ──────────────────────────────────────────────────────
@@ -78,7 +76,8 @@ export async function buildBoard(
   const positions: ElementPosition[] = sorted.map((a) => a.position)
   const normPos = normalisePositions(positions)
 
-  const checksumIndex = loadChecksumIndex()
+  const providerName = storage.name || 'local'
+  const checksumIndex = loadChecksumIndex(providerName)
   const importedAssets: ImportedAsset[] = []
   const importedShapes: ImportedShape[] = []
 
@@ -150,7 +149,7 @@ export async function buildBoard(
   }
 
   reporter.stopUploadTimer()
-  saveChecksumIndex(checksumIndex)
+  saveChecksumIndex(providerName, checksumIndex)
 
   reporter.setGeneratedBoardObjects(importedShapes.length)
   return { _importResult: true, importedAssets, importedShapes }

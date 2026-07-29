@@ -469,11 +469,26 @@ export class GoogleDriveProvider implements StorageProvider {
   }
 
   public async downloadAsset(assetId: string): Promise<Blob> {
-    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files/${assetId}?alt=media`)
+    const cleanId = assetId.replace(/^asset-id:\/\//, '')
+    if (cleanId.startsWith('local_asset_')) {
+      const raw = localStorage.getItem(`whiteboard_asset_${cleanId}`)
+      if (raw) {
+        const { mimeType, data } = JSON.parse(raw)
+        const base64Content = data.split(',')[1]
+        const binary = atob(base64Content)
+        const array = []
+        for (let i = 0; i < binary.length; i++) {
+          array.push(binary.charCodeAt(i))
+        }
+        return new Blob([new Uint8Array(array)], { type: mimeType })
+      }
+    }
+    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files/${cleanId}?alt=media`)
     return res.blob()
   }
 
   public async deleteAsset(assetId: string): Promise<void> {
-    await this.deleteFile(assetId)
+    const cleanId = assetId.replace(/^asset-id:\/\//, '')
+    await this.deleteFile(cleanId)
   }
 }

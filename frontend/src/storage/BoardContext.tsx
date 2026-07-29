@@ -42,9 +42,15 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const [boards, setBoards] = useState<BoardHeader[]>([])
   const [activeBoard, setActiveBoard] = useState<Board | null>(null)
+  const activeBoardRef = useRef<Board | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
+
+  // Keep activeBoardRef in sync with state
+  useEffect(() => {
+    activeBoardRef.current = activeBoard
+  }, [activeBoard])
 
   // Switch providers when user updates settings
   const setProviderName = (name: 'local' | 'google-drive') => {
@@ -88,6 +94,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const board = await repositoryRef.current.load(id)
       if (board) {
         setActiveBoard(board)
+        activeBoardRef.current = board
         localStorage.setItem('whiteboard_last_active_id', id)
         return board
       }
@@ -114,6 +121,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await repositoryRef.current.save(newBoard)
     await refreshBoardsList()
     setActiveBoard(newBoard)
+    activeBoardRef.current = newBoard
     localStorage.setItem('whiteboard_last_active_id', newBoard.id)
     return newBoard
   }
@@ -123,6 +131,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (activeBoard && activeBoard.id === id) {
       const updated = { ...activeBoard, title, updatedAt: new Date().toISOString() }
       setActiveBoard(updated)
+      activeBoardRef.current = updated
       await repositoryRef.current.save(updated)
     } else {
       const board = await repositoryRef.current.load(id)
@@ -140,6 +149,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     await repositoryRef.current.delete(id)
     if (activeBoard && activeBoard.id === id) {
       setActiveBoard(null)
+      activeBoardRef.current = null
       localStorage.removeItem('whiteboard_last_active_id')
     }
     await refreshBoardsList()
@@ -154,10 +164,13 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Save active board elements with debouncing (auto-save)
   const saveActiveBoardElements = (elements: any) => {
-    if (!activeBoard) return
+    const currentBoard = activeBoardRef.current
+    if (!currentBoard) return
 
     // Update active board in memory instantly
-    setActiveBoard((prev) => (prev ? { ...prev, elements } : null))
+    const updatedBoard = { ...currentBoard, elements }
+    activeBoardRef.current = updatedBoard
+    setActiveBoard(updatedBoard)
     setSaving(true)
 
     if (saveTimeoutRef.current) {
@@ -165,18 +178,18 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     saveTimeoutRef.current = window.setTimeout(async () => {
-      if (activeBoard) {
+      const boardToSave = activeBoardRef.current
+      if (boardToSave) {
         try {
-          const boardToSave: Board = {
-            ...activeBoard,
-            elements,
+          const finalBoard: Board = {
+            ...boardToSave,
             updatedAt: new Date().toISOString(),
           }
-          await repositoryRef.current.save(boardToSave)
+          await repositoryRef.current.save(finalBoard)
           // Update the metadata list to show new updatedAt
           setBoards((prev) =>
             prev.map((b) =>
-              b.id === activeBoard.id ? { ...b, updatedAt: boardToSave.updatedAt } : b
+              b.id === finalBoard.id ? { ...b, updatedAt: finalBoard.updatedAt } : b
             )
           )
         } catch (e) {

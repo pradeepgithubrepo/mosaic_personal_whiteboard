@@ -87,9 +87,10 @@ export class LocalProvider implements StorageProvider {
   }
 
   public async downloadAsset(assetId: string): Promise<Blob> {
-    const raw = localStorage.getItem(`whiteboard_asset_${assetId}`)
+    const cleanId = assetId.replace(/^asset-id:\/\//, '')
+    const raw = localStorage.getItem(`whiteboard_asset_${cleanId}`)
     if (!raw) {
-      throw new Error(`Asset not found: ${assetId}`)
+      throw new Error(`Asset not found: ${cleanId}`)
     }
     const { mimeType, data } = JSON.parse(raw)
     const base64Content = data.split(',')[1]
@@ -102,7 +103,8 @@ export class LocalProvider implements StorageProvider {
   }
 
   public async deleteAsset(assetId: string): Promise<void> {
-    localStorage.removeItem(`whiteboard_asset_${assetId}`)
+    const cleanId = assetId.replace(/^asset-id:\/\//, '')
+    localStorage.removeItem(`whiteboard_asset_${cleanId}`)
   }
 
   // Low-level Workspace & File CRUD operations (Phase 2 Validation)
