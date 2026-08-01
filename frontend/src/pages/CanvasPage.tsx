@@ -82,7 +82,11 @@ async function resolveSnapshotAssets(snapshot: any, downloadAsset: (id: string) 
         const cleanStorageId = storageId.replace(/^asset-id:\/\//, '')
         try {
           const blob = await downloadAsset(cleanStorageId)
-          record.props.src = URL.createObjectURL(blob)
+          const targetMime = record.props?.mimeType || (blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png')
+          const imageBlob = (blob.type && blob.type.startsWith('image/'))
+            ? blob
+            : new Blob([await blob.arrayBuffer()], { type: targetMime })
+          record.props.src = URL.createObjectURL(imageBlob)
           record.meta = { ...record.meta, storageAssetId: cleanStorageId }
         } catch (err) {
           console.warn(`Could not resolve asset ${cleanStorageId}:`, err)

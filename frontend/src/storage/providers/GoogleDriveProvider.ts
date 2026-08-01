@@ -484,7 +484,13 @@ export class GoogleDriveProvider implements StorageProvider {
       }
     }
     const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files/${cleanId}?alt=media`)
-    return res.blob()
+    const contentType = res.headers.get('content-type')
+    const rawBlob = await res.blob()
+    if (!rawBlob.type || !rawBlob.type.startsWith('image/')) {
+      const mime = (contentType && contentType.startsWith('image/')) ? contentType : 'image/png'
+      return new Blob([await rawBlob.arrayBuffer()], { type: mime })
+    }
+    return rawBlob
   }
 
   public async deleteAsset(assetId: string): Promise<void> {
