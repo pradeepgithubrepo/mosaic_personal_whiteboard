@@ -185,9 +185,11 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             updatedAt: new Date().toISOString(),
           }
           await repositoryRef.current.save(finalBoard)
-          // Update activeBoard state once save completes
-          setActiveBoard(finalBoard)
-          // Update the metadata list to show new updatedAt
+          // Keep ref current with the persisted updatedAt timestamp
+          // NOTE: Do NOT call setActiveBoard here — that would trigger a React
+          // re-render cascade which remounts Tldraw and clears the canvas.
+          activeBoardRef.current = finalBoard
+          // Update the sidebar metadata list to show new updatedAt
           setBoards((prev) =>
             prev.map((b) =>
               b.id === finalBoard.id ? { ...b, updatedAt: finalBoard.updatedAt } : b

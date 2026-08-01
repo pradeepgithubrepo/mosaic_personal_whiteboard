@@ -140,19 +140,17 @@ export const CanvasPage: React.FC = () => {
   const { resolvedTheme } = useTheme()
 
   const disposeRef = useRef<(() => void) | null>(null)
-  const mountedBoardIdRef = useRef<string | null>(null)
+
+  // Keep these refs current synchronously during every render.
+  // Updating refs in the render body (not in a useEffect) guarantees that
+  // tldraw's internal onMount — which fires inside a useLayoutEffect before
+  // parent useEffects have run — always reads the latest values.
   const activeBoardRef = useRef(activeBoard)
+  activeBoardRef.current = activeBoard
   const downloadAssetRef = useRef(downloadAsset)
+  downloadAssetRef.current = downloadAsset
   const saveActiveBoardElementsRef = useRef(saveActiveBoardElements)
-
-  useEffect(() => {
-    activeBoardRef.current = activeBoard
-  }, [activeBoard])
-
-  useEffect(() => {
-    downloadAssetRef.current = downloadAsset
-    saveActiveBoardElementsRef.current = saveActiveBoardElements
-  }, [downloadAsset, saveActiveBoardElements])
+  saveActiveBoardElementsRef.current = saveActiveBoardElements
 
   // Sync route param with active board selection
   useEffect(() => {
@@ -170,12 +168,10 @@ export const CanvasPage: React.FC = () => {
     }
   }, [id, boards.length, activeBoard?.id])
 
-  // Cleanup store listener on board change / unmount
+  // Dispose the store listener when the active board changes or on unmount.
+  // A fresh listener is always registered inside handleMount on the new editor instance.
   useEffect(() => {
     return () => {
-      if (activeBoard?.id !== mountedBoardIdRef.current) {
-        mountedBoardIdRef.current = null
-      }
       if (disposeRef.current) {
         disposeRef.current()
         disposeRef.current = null
@@ -185,19 +181,17 @@ export const CanvasPage: React.FC = () => {
 
   const handleMount = React.useCallback((editor: Editor) => {
     const currentBoard = activeBoardRef.current
-    if (currentBoard && mountedBoardIdRef.current !== currentBoard.id) {
-      mountedBoardIdRef.current = currentBoard.id
 
+    // Always (re-)load board content into this editor instance.
+    // This handles both the normal first mount and any accidental remount
+    // caused by React re-render cascades — without relying on a stale ID guard.
+    if (currentBoard) {
       const initBoard = async () => {
         if (currentBoard.elements && Object.keys(currentBoard.elements).length > 0) {
           try {
             if (isImportResult(currentBoard.elements)) {
               // --- Path A: first-time import result --------------------------------
-              // Use the Editor API directly; assets already carry blob URLs
               await applyImportResult(editor, currentBoard.elements as ImportResult)
-
-              // Immediately re-save the board as a proper tldraw snapshot so
-              // future loads go through Path B (the normal reload path)
               const snapshot = getSnapshot(editor.store)
               const cleanSnapshot = cleanSnapshotForStorage(snapshot)
               saveActiveBoardElementsRef.current(cleanSnapshot)
@@ -213,23 +207,25 @@ export const CanvasPage: React.FC = () => {
           }
         }
       }
-
       initBoard()
     }
 
-    if (!disposeRef.current) {
-      // Register auto-save listener — cleans blob: URLs before writing to storage
-      const dispose = editor.store.listen(
-        () => {
-          const snapshot = getSnapshot(editor.store)
-          const clean = cleanSnapshotForStorage(snapshot)
-          saveActiveBoardElementsRef.current(clean)
-        },
-        { scope: 'document' }
-      )
-
-      disposeRef.current = dispose
+    // Always dispose any stale listener from a previous editor instance and
+    // register a fresh one on this editor. This fixes the case where Tldraw
+    // remounts (disposeRef still holds the old fn) and the !disposeRef.current
+    // guard would skip registering a listener on the new editor.
+    if (disposeRef.current) {
+      disposeRef.current()
     }
+    const dispose = editor.store.listen(
+      () => {
+        const snapshot = getSnapshot(editor.store)
+        const clean = cleanSnapshotForStorage(snapshot)
+        saveActiveBoardElementsRef.current(clean)
+      },
+      { scope: 'document' }
+    )
+    disposeRef.current = dispose
   }, [])
 
   const handleCreateBoard = async () => {
