@@ -138,7 +138,21 @@ export const CanvasPage: React.FC = () => {
   const navigate = useNavigate()
   const { activeBoard, selectBoard, createBoard, saveActiveBoardElements, loading, boards, downloadAsset } = useBoard()
   const { resolvedTheme } = useTheme()
+
   const disposeRef = useRef<(() => void) | null>(null)
+  const mountedBoardIdRef = useRef<string | null>(null)
+  const activeBoardRef = useRef(activeBoard)
+  const downloadAssetRef = useRef(downloadAsset)
+  const saveActiveBoardElementsRef = useRef(saveActiveBoardElements)
+
+  useEffect(() => {
+    activeBoardRef.current = activeBoard
+  }, [activeBoard])
+
+  useEffect(() => {
+    downloadAssetRef.current = downloadAsset
+    saveActiveBoardElementsRef.current = saveActiveBoardElements
+  }, [downloadAsset, saveActiveBoardElements])
 
   // Sync route param with active board selection
   useEffect(() => {
@@ -159,6 +173,9 @@ export const CanvasPage: React.FC = () => {
   // Cleanup store listener on board change / unmount
   useEffect(() => {
     return () => {
+      if (activeBoard?.id !== mountedBoardIdRef.current) {
+        mountedBoardIdRef.current = null
+      }
       if (disposeRef.current) {
         disposeRef.current()
         disposeRef.current = null
@@ -166,47 +183,54 @@ export const CanvasPage: React.FC = () => {
     }
   }, [activeBoard?.id])
 
-  const handleMount = (editor: Editor) => {
-    const initBoard = async () => {
-      if (activeBoard?.elements && Object.keys(activeBoard.elements).length > 0) {
-        try {
-          if (isImportResult(activeBoard.elements)) {
-            // --- Path A: first-time import result --------------------------------
-            // Use the Editor API directly; assets already carry blob URLs
-            await applyImportResult(editor, activeBoard.elements as ImportResult)
+  const handleMount = React.useCallback((editor: Editor) => {
+    const currentBoard = activeBoardRef.current
+    if (currentBoard && mountedBoardIdRef.current !== currentBoard.id) {
+      mountedBoardIdRef.current = currentBoard.id
 
-            // Immediately re-save the board as a proper tldraw snapshot so
-            // future loads go through Path B (the normal reload path)
-            const snapshot = getSnapshot(editor.store)
-            const cleanSnapshot = cleanSnapshotForStorage(snapshot)
-            saveActiveBoardElements(cleanSnapshot)
-          } else {
-            // --- Path B: normal board reload (snapshot persisted from previous session)
-            const rawSnapshot = JSON.parse(JSON.stringify(activeBoard.elements))
-            const normalized = normalizeSnapshot(rawSnapshot)
-            const resolved = await resolveSnapshotAssets(normalized, downloadAsset)
-            loadSnapshot(editor.store, resolved)
+      const initBoard = async () => {
+        if (currentBoard.elements && Object.keys(currentBoard.elements).length > 0) {
+          try {
+            if (isImportResult(currentBoard.elements)) {
+              // --- Path A: first-time import result --------------------------------
+              // Use the Editor API directly; assets already carry blob URLs
+              await applyImportResult(editor, currentBoard.elements as ImportResult)
+
+              // Immediately re-save the board as a proper tldraw snapshot so
+              // future loads go through Path B (the normal reload path)
+              const snapshot = getSnapshot(editor.store)
+              const cleanSnapshot = cleanSnapshotForStorage(snapshot)
+              saveActiveBoardElementsRef.current(cleanSnapshot)
+            } else {
+              // --- Path B: normal board reload (snapshot persisted from previous session)
+              const rawSnapshot = JSON.parse(JSON.stringify(currentBoard.elements))
+              const normalized = normalizeSnapshot(rawSnapshot)
+              const resolved = await resolveSnapshotAssets(normalized, downloadAssetRef.current)
+              loadSnapshot(editor.store, resolved)
+            }
+          } catch (e) {
+            console.error('Failed to load board:', e)
           }
-        } catch (e) {
-          console.error('Failed to load board:', e)
         }
       }
+
+      initBoard()
     }
 
-    initBoard()
+    if (!disposeRef.current) {
+      // Register auto-save listener — cleans blob: URLs before writing to storage
+      const dispose = editor.store.listen(
+        () => {
+          const snapshot = getSnapshot(editor.store)
+          const clean = cleanSnapshotForStorage(snapshot)
+          saveActiveBoardElementsRef.current(clean)
+        },
+        { scope: 'document' }
+      )
 
-    // Register auto-save listener — cleans blob: URLs before writing to storage
-    const dispose = editor.store.listen(
-      () => {
-        const snapshot = getSnapshot(editor.store)
-        const clean = cleanSnapshotForStorage(snapshot)
-        saveActiveBoardElements(clean)
-      },
-      { scope: 'document' }
-    )
-
-    disposeRef.current = dispose
-  }
+      disposeRef.current = dispose
+    }
+  }, [])
 
   const handleCreateBoard = async () => {
     const title = `My Whiteboard ${boards.length + 1}`

@@ -167,10 +167,9 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const currentBoard = activeBoardRef.current
     if (!currentBoard) return
 
-    // Update active board in memory instantly
+    // Update active board ref in memory instantly (prevents high-frequency React re-renders while drawing)
     const updatedBoard = { ...currentBoard, elements }
     activeBoardRef.current = updatedBoard
-    setActiveBoard(updatedBoard)
     setSaving(true)
 
     if (saveTimeoutRef.current) {
@@ -186,6 +185,8 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             updatedAt: new Date().toISOString(),
           }
           await repositoryRef.current.save(finalBoard)
+          // Update activeBoard state once save completes
+          setActiveBoard(finalBoard)
           // Update the metadata list to show new updatedAt
           setBoards((prev) =>
             prev.map((b) =>
