@@ -62,8 +62,18 @@ async function applyImportResult(editor: Editor, result: ImportResult) {
   editor.zoomToFit({ animation: { duration: 400 } })
 }
 
+// Helper to extract valid tldraw snapshot containing store
+function normalizeSnapshot(snapshot: any): any {
+  if (!snapshot) return snapshot
+  if (snapshot.document?.store) {
+    return snapshot.document
+  }
+  return snapshot
+}
+
 // Resolve asset-id:// references in a persisted snapshot back to blob URLs
-async function resolveSnapshotAssets(snapshot: any, downloadAsset: (id: string) => Promise<Blob>): Promise<any> {
+async function resolveSnapshotAssets(rawSnapshot: any, downloadAsset: (id: string) => Promise<Blob>): Promise<any> {
+  const snapshot = normalizeSnapshot(rawSnapshot)
   const store = snapshot?.store || {}
   const promises = Object.keys(store).map(async (key) => {
     const record = store[key]
@@ -99,8 +109,9 @@ async function resolveSnapshotAssets(snapshot: any, downloadAsset: (id: string) 
 }
 
 // Strip blob: URLs back to asset-id:// before persistence
-function cleanSnapshotForStorage(snapshot: any): any {
-  if (!snapshot) return snapshot
+function cleanSnapshotForStorage(rawSnapshot: any): any {
+  if (!rawSnapshot) return rawSnapshot
+  const snapshot = normalizeSnapshot(rawSnapshot)
   const clean = JSON.parse(JSON.stringify(snapshot))
   const store = clean?.store || {}
   Object.keys(store).forEach((key) => {
@@ -171,8 +182,9 @@ export const CanvasPage: React.FC = () => {
             saveActiveBoardElements(cleanSnapshot)
           } else {
             // --- Path B: normal board reload (snapshot persisted from previous session)
-            const snapshot = JSON.parse(JSON.stringify(activeBoard.elements))
-            const resolved = await resolveSnapshotAssets(snapshot, downloadAsset)
+            const rawSnapshot = JSON.parse(JSON.stringify(activeBoard.elements))
+            const normalized = normalizeSnapshot(rawSnapshot)
+            const resolved = await resolveSnapshotAssets(normalized, downloadAsset)
             loadSnapshot(editor.store, resolved)
           }
         } catch (e) {
