@@ -66,30 +66,22 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveBoard(null)
   }
 
-  // Refresh lists
+  // Refresh lists (does NOT touch the main loading spinner — that is only for board content load)
   const refreshBoardsList = async () => {
-    console.log('[BoardContext] refreshBoardsList -> setLoading(true)')
-    setLoading(true)
     try {
       const list = await repositoryRef.current.list()
       setBoards(list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
     } catch (e) {
       console.error('Failed to load board list:', e)
       setBoards([])
-    } finally {
-      console.log('[BoardContext] refreshBoardsList -> setLoading(false)')
-      setLoading(false)
     }
   }
 
-  // Load initial lists on mount
+  // Load initial board list on mount (or when provider changes).
+  // Board content loading is handled entirely by CanvasPage via route params.
+  // We deliberately do NOT call selectBoard here to avoid racing with CanvasPage's own load.
   useEffect(() => {
     refreshBoardsList()
-    // Open the last active board if it exists
-    const lastActiveId = localStorage.getItem('whiteboard_last_active_id')
-    if (lastActiveId) {
-      selectBoard(lastActiveId)
-    }
   }, [providerName])
 
   // Select/Open a board

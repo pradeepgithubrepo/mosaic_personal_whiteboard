@@ -152,22 +152,24 @@ export const CanvasPage: React.FC = () => {
   const saveActiveBoardElementsRef = useRef(saveActiveBoardElements)
   saveActiveBoardElementsRef.current = saveActiveBoardElements
 
-  // Sync route param with active board selection
+  // Sync route param with active board selection.
+  // Deps: only id (URL) and activeBoard?.id (board switch) — NOT boards.length.
+  // boards.length changes when the sidebar list refreshes and must NOT trigger a board reload.
   useEffect(() => {
     if (id) {
       if (!activeBoard || activeBoard.id !== id) {
-        console.log(`[CanvasPage] useEffect[id,boards.length,activeBoard?.id] -> selectBoard(${id}), reason: activeBoard=${activeBoard?.id ?? 'null'}`)
+        console.log(`[CanvasPage] useEffect[id,activeBoard?.id] -> selectBoard(${id}), reason: activeBoard=${activeBoard?.id ?? 'null'}`)
         selectBoard(id)
       }
     } else {
       const lastActiveId = localStorage.getItem('whiteboard_last_active_id')
-      if (lastActiveId && boards.some((b) => b.id === lastActiveId)) {
+      if (lastActiveId) {
         navigate(`/board/${lastActiveId}`, { replace: true })
       } else if (boards.length > 0) {
         navigate(`/board/${boards[0].id}`, { replace: true })
       }
     }
-  }, [id, boards.length, activeBoard?.id])
+  }, [id, activeBoard?.id])
 
   // Dispose the store listener when the active board changes or on unmount.
   // A fresh listener is always registered inside handleMount on the new editor instance.
