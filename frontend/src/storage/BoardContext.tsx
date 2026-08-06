@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react'
+import React, { createContext, useContext, useEffect, useState, useRef, startTransition } from 'react'
 import { Board, BoardHeader, StorageProvider } from '../types'
 import { BoardRepository } from './BoardRepository'
 import { LocalProvider } from './providers/LocalProvider'
@@ -46,6 +46,9 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
+  // Tracks whether a save is already in-flight; avoids calling setSaving(true) on every
+  // draw event (which would cascade React re-renders through the entire context tree).
+  const isSavingRef = useRef(false)
 
   // Keep activeBoardRef in sync with state
   useEffect(() => {
@@ -170,7 +173,13 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Update active board ref in memory instantly (prevents high-frequency React re-renders while drawing)
     const updatedBoard = { ...currentBoard, elements }
     activeBoardRef.current = updatedBoard
-    setSaving(true)
+
+    // Only fire the React state update once per save cycle — not on every draw event.
+    // isSavingRef gates this so we don't cascade re-renders through BoardContext on every stroke.
+    if (!isSavingRef.current) {
+      isSavingRef.current = true
+      setSaving(true)
+    }
 
     if (saveTimeoutRef.current) {
       window.clearTimeout(saveTimeoutRef.current)
@@ -186,18 +195,24 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
           await repositoryRef.current.save(finalBoard)
           // Keep ref current with the persisted updatedAt timestamp
-          // NOTE: Do NOT call setActiveBoard here — that would trigger a React
-          // re-render cascade which remounts Tldraw and clears the canvas.
           activeBoardRef.current = finalBoard
-          // Update the sidebar metadata list to show new updatedAt
-          setBoards((prev) =>
-            prev.map((b) =>
-              b.id === finalBoard.id ? { ...b, updatedAt: finalBoard.updatedAt } : b
+          // Sync React state with the saved board using startTransition (low-priority batch).
+          // This keeps activeBoard state in sync with activeBoardRef so any re-render or
+          // remount reads current elements rather than the stale initial load.
+          // setActiveBoard is safe here: key={activeBoard.id} on the Tldraw wrapper is stable
+          // (ID doesn't change), so Tldraw will NOT unmount — only a cheap re-render occurs.
+          startTransition(() => {
+            setActiveBoard(finalBoard)
+            setBoards((prev) =>
+              prev.map((b) =>
+                b.id === finalBoard.id ? { ...b, updatedAt: finalBoard.updatedAt } : b
+              )
             )
-          )
+          })
         } catch (e) {
           console.error('Failed to auto-save board elements:', e)
         } finally {
+          isSavingRef.current = false
           setSaving(false)
         }
       }
