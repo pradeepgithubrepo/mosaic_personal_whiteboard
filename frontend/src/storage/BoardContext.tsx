@@ -68,6 +68,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Refresh lists
   const refreshBoardsList = async () => {
+    console.log('[BoardContext] refreshBoardsList -> setLoading(true)')
     setLoading(true)
     try {
       const list = await repositoryRef.current.list()
@@ -76,6 +77,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.error('Failed to load board list:', e)
       setBoards([])
     } finally {
+      console.log('[BoardContext] refreshBoardsList -> setLoading(false)')
       setLoading(false)
     }
   }
@@ -92,10 +94,12 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Select/Open a board
   const selectBoard = async (id: string): Promise<Board | null> => {
+    console.log(`[BoardContext] selectBoard called for id=${id}`)
     setLoading(true)
     try {
       const board = await repositoryRef.current.load(id)
       if (board) {
+        console.log(`[BoardContext] selectBoard loaded board, elements type=${Array.isArray(board.elements) ? 'array('+board.elements.length+')' : typeof board.elements}, keys=${board.elements && !Array.isArray(board.elements) ? Object.keys(board.elements).length : 'n/a'}`)
         setActiveBoard(board)
         activeBoardRef.current = board
         localStorage.setItem('whiteboard_last_active_id', id)
@@ -106,6 +110,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.error(`Failed to load board ${id}:`, e)
       return null
     } finally {
+      console.log(`[BoardContext] selectBoard finally -> setLoading(false)`)
       setLoading(false)
     }
   }
@@ -193,14 +198,12 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             ...boardToSave,
             updatedAt: new Date().toISOString(),
           }
+          console.log(`[BoardContext] Drive save starting for board ${finalBoard.id}, elements keys=${finalBoard.elements && !Array.isArray(finalBoard.elements) ? Object.keys(finalBoard.elements).length : 'array/empty'}`)
           await repositoryRef.current.save(finalBoard)
+          console.log('[BoardContext] Drive save complete -> updating state')
           // Keep ref current with the persisted updatedAt timestamp
           activeBoardRef.current = finalBoard
           // Sync React state with the saved board using startTransition (low-priority batch).
-          // This keeps activeBoard state in sync with activeBoardRef so any re-render or
-          // remount reads current elements rather than the stale initial load.
-          // setActiveBoard is safe here: key={activeBoard.id} on the Tldraw wrapper is stable
-          // (ID doesn't change), so Tldraw will NOT unmount — only a cheap re-render occurs.
           startTransition(() => {
             setActiveBoard(finalBoard)
             setBoards((prev) =>
@@ -213,6 +216,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.error('Failed to auto-save board elements:', e)
         } finally {
           isSavingRef.current = false
+          console.log('[BoardContext] setSaving(false)')
           setSaving(false)
         }
       }

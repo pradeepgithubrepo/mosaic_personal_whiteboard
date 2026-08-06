@@ -156,6 +156,7 @@ export const CanvasPage: React.FC = () => {
   useEffect(() => {
     if (id) {
       if (!activeBoard || activeBoard.id !== id) {
+        console.log(`[CanvasPage] useEffect[id,boards.length,activeBoard?.id] -> selectBoard(${id}), reason: activeBoard=${activeBoard?.id ?? 'null'}`)
         selectBoard(id)
       }
     } else {
@@ -181,39 +182,35 @@ export const CanvasPage: React.FC = () => {
 
   const handleMount = React.useCallback((editor: Editor) => {
     const currentBoard = activeBoardRef.current
+    console.log(`[CanvasPage] handleMount fired, board=${currentBoard?.id ?? 'null'}, elements type=${currentBoard?.elements ? (Array.isArray(currentBoard.elements) ? 'array('+currentBoard.elements.length+')' : 'object('+Object.keys(currentBoard.elements).length+' keys)') : 'null/undefined'}`)
 
     // Always (re-)load board content into this editor instance.
-    // This handles both the normal first mount and any accidental remount
-    // caused by React re-render cascades — without relying on a stale ID guard.
     if (currentBoard) {
       const initBoard = async () => {
         if (currentBoard.elements && Object.keys(currentBoard.elements).length > 0) {
           try {
             if (isImportResult(currentBoard.elements)) {
-              // --- Path A: first-time import result --------------------------------
               await applyImportResult(editor, currentBoard.elements as ImportResult)
               const snapshot = getSnapshot(editor.store)
               const cleanSnapshot = cleanSnapshotForStorage(snapshot)
               saveActiveBoardElementsRef.current(cleanSnapshot)
             } else {
-              // --- Path B: normal board reload (snapshot persisted from previous session)
               const rawSnapshot = JSON.parse(JSON.stringify(currentBoard.elements))
               const normalized = normalizeSnapshot(rawSnapshot)
               const resolved = await resolveSnapshotAssets(normalized, downloadAssetRef.current)
+              console.log(`[CanvasPage] loadSnapshot called with store keys=${resolved?.store ? Object.keys(resolved.store).length : 0}`)
               loadSnapshot(editor.store, resolved)
             }
           } catch (e) {
             console.error('Failed to load board:', e)
           }
+        } else {
+          console.log('[CanvasPage] initBoard skipped - elements empty/null')
         }
       }
       initBoard()
     }
 
-    // Always dispose any stale listener from a previous editor instance and
-    // register a fresh one on this editor. This fixes the case where Tldraw
-    // remounts (disposeRef still holds the old fn) and the !disposeRef.current
-    // guard would skip registering a listener on the new editor.
     if (disposeRef.current) {
       disposeRef.current()
     }
