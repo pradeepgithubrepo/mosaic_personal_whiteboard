@@ -18,6 +18,46 @@ function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
   }) as T
 }
 
+/**
+ * Compare elements, files, and persisted appState to check if the scene has changed.
+ * Prevents triggering saves on panning, scrolling, zooming, selection, or hovers.
+ */
+function hasSceneChanged(
+  prev: ExcalidrawScene | null | undefined,
+  next: ExcalidrawScene
+): boolean {
+  if (!prev) return true
+
+  // 1. Compare persisted appState fields
+  if (prev.appState?.viewBackgroundColor !== next.appState?.viewBackgroundColor) return true
+  if (prev.appState?.gridSize !== next.appState?.gridSize) return true
+  if (prev.appState?.theme !== next.appState?.theme) return true
+
+  // 2. Compare files keys (assets)
+  const prevFileKeys = Object.keys(prev.files || {})
+  const nextFileKeys = Object.keys(next.files || {})
+  if (prevFileKeys.length !== nextFileKeys.length) return true
+  for (const key of nextFileKeys) {
+    if (!(key in (prev.files || {}))) return true
+  }
+
+  // 3. Compare elements length and identity/version/deletion properties
+  const prevElements = prev.elements || []
+  const nextElements = next.elements || []
+  if (prevElements.length !== nextElements.length) return true
+
+  for (let i = 0; i < nextElements.length; i++) {
+    const pEl = prevElements[i]
+    const nEl = nextElements[i]
+    if (!pEl || !nEl) return true
+    if (pEl.id !== nEl.id) return true
+    if (pEl.version !== nEl.version) return true
+    if (pEl.isDeleted !== nEl.isDeleted) return true
+  }
+
+  return false
+}
+
 export const CanvasPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -32,6 +72,11 @@ export const CanvasPage: React.FC = () => {
   // callback never goes stale without being recreated.
   const saveRef = useRef(saveActiveBoardElements)
   saveRef.current = saveActiveBoardElements
+
+  // Keep activeBoard stable in ref so debounced onChange can access the latest
+  // state without triggering recreation of the callback.
+  const activeBoardRef = useRef(activeBoard)
+  activeBoardRef.current = activeBoard
 
   // ─── Board selection from URL param ─────────────────────────────────────
   // Deps: only id (URL) and activeBoard?.id.
@@ -84,7 +129,11 @@ export const CanvasPage: React.FC = () => {
           },
           files: files ?? {},
         }
-        saveRef.current(scene)
+        
+        const currentElements = activeBoardRef.current?.elements
+        if (hasSceneChanged(currentElements, scene)) {
+          saveRef.current(scene)
+        }
       },
       1000
     ),
