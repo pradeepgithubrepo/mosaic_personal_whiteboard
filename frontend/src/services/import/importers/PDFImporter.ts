@@ -108,7 +108,7 @@ export class PDFImporter implements Importer {
     onProgress('Composing canvas...', 80)
     for (const { dataURL, width, height } of pageData) {
       const x = (maxWidth - width) / 2  // centre narrower pages
-      const scene = buildImageScene(dataURL, 'image/png', width, height, x, currentY)
+      const scene = buildImageScene(dataURL, 'image/png', width, height, x, currentY, 0, true)
       allElements.push(...scene.elements)
       Object.assign(allFiles, scene.files)
       currentY += height + PAGE_SPACING

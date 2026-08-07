@@ -110,25 +110,118 @@ export function extractAssets(doc: Document): RawAsset[] {
     })
   })
 
-  // 3. <svg> elements – serialise to a data URL
+  // 3. <svg> elements – extract nested <image> elements and serialize remaining shapes
   doc.querySelectorAll('svg').forEach((svgEl) => {
     // Skip tiny / invisible SVGs (icon sprites etc.)
     const w = parseFloat(svgEl.getAttribute('width') || svgEl.style.width || '0')
     const h = parseFloat(svgEl.getAttribute('height') || svgEl.style.height || '0')
     if (w < 10 && h < 10) return
 
-    const src = svgToDataUrl(svgEl as SVGElement)
-    const position = extractPosition(svgEl.parentElement as HTMLElement || document.body)
+    const position = extractPosition(svgEl.parentElement as HTMLElement || svgEl)
 
-    assets.push({
-      kind: 'svg',
-      src,
-      mimeType: 'image/svg+xml',
-      fileName: `svg_asset_${index++}.svg`,
-      width: w || position.width,
-      height: h || position.height,
-      position,
-    })
+    // Check for nested image elements
+    const images = svgEl.querySelectorAll('image')
+
+    // Parse viewBox for scaling nested images
+    let minX = 0
+    let minY = 0
+    let viewBoxWidth = w || position.width || 800
+    let viewBoxHeight = h || position.height || 600
+
+    const vbAttr = svgEl.getAttribute('viewBox')
+    if (vbAttr) {
+      const parts = vbAttr.split(/\s+/).map(Number)
+      if (parts.length === 4 && !parts.some(isNaN)) {
+        minX = parts[0]
+        minY = parts[1]
+        viewBoxWidth = parts[2]
+        viewBoxHeight = parts[3]
+      }
+    }
+
+    const parentWidth = w || position.width || viewBoxWidth
+    const parentHeight = h || position.height || viewBoxHeight
+
+    const scaleX = viewBoxWidth > 0 ? parentWidth / viewBoxWidth : 1
+    const scaleY = viewBoxHeight > 0 ? parentHeight / viewBoxHeight : 1
+
+    if (images.length > 0) {
+      images.forEach((img) => {
+        const href = img.getAttribute('href') || img.getAttribute('xlink:href')
+        if (!href) return
+
+        const imgX = parseFloat(img.getAttribute('x') || '0')
+        const imgY = parseFloat(img.getAttribute('y') || '0')
+        const imgW = parseFloat(img.getAttribute('width') || '0')
+        const imgH = parseFloat(img.getAttribute('height') || '0')
+
+        // Remove from the SVG so it is not rendered as part of the background/parent SVG drawing
+        img.remove()
+
+        // Place as a standalone image asset on the canvas
+        // Translate coordinates: (imgX - minX) * scaleX relative to parent absolute position
+        const absoluteX = position.x + (imgX - minX) * scaleX
+        const absoluteY = position.y + (imgY - minY) * scaleY
+        const targetW = imgW * scaleX
+        const targetH = imgH * scaleY
+
+        const mime = guessMimeFromSrc(href)
+        assets.push({
+          kind: 'image',
+          src: href,
+          mimeType: mime,
+          fileName: sanitiseFileName(href, index++, mime),
+          width: targetW,
+          height: targetH,
+          position: {
+            x: absoluteX,
+            y: absoluteY,
+            width: targetW,
+            height: targetH,
+            rotation: 0,
+            scaleX: 1,
+            scaleY: 1,
+            opacity: 1,
+            zIndex: position.zIndex + 1, // place above parent
+          },
+        })
+      })
+    }
+
+    // Now, if there is still visual content in the SVG, serialize it
+    const visualSelectors = 'path, rect, circle, ellipse, line, polyline, polygon, text, g'
+    const visualElements = svgEl.querySelectorAll(visualSelectors)
+    let hasVisualContent = false
+
+    for (const el of Array.from(visualElements)) {
+      if (el.tagName.toLowerCase() === 'g') {
+        const children = el.querySelectorAll('path, rect, circle, ellipse, line, polyline, polygon, text')
+        if (children.length > 0) {
+          hasVisualContent = true
+          break
+        }
+      } else {
+        hasVisualContent = true
+        break
+      }
+    }
+
+    if (hasVisualContent) {
+      const src = svgToDataUrl(svgEl as SVGElement)
+      assets.push({
+        kind: 'svg',
+        src,
+        mimeType: 'image/svg+xml',
+        fileName: `svg_asset_${index++}.svg`,
+        width: parentWidth,
+        height: parentHeight,
+        position: {
+          ...position,
+          width: parentWidth,
+          height: parentHeight,
+        },
+      })
+    }
   })
 
   return assets

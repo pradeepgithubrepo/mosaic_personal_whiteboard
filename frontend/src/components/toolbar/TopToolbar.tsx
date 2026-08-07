@@ -17,12 +17,12 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({ onToggleSidebar, isSideb
   const [title, setTitle] = useState('')
   const [isEditing, setIsEditing] = useState(false)
 
-  // Sync state with active board
+  // Sync state with active board (only when not editing)
   useEffect(() => {
-    if (activeBoard) {
+    if (activeBoard && !isEditing) {
       setTitle(activeBoard.title)
     }
-  }, [activeBoard])
+  }, [activeBoard, isEditing])
 
   const handleRenameSubmit = async () => {
     setIsEditing(false)
@@ -31,9 +31,9 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({ onToggleSidebar, isSideb
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      handleRenameSubmit()
+      e.currentTarget.blur()
     } else if (e.key === 'Escape') {
       setIsEditing(false)
       if (activeBoard) {

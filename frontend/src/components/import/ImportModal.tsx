@@ -15,7 +15,7 @@ type ImportPhase = 'idle' | 'analyzing' | 'preview' | 'importing' | 'success' | 
 
 export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
   const navigate = useNavigate()
-  const { repository } = useBoard()
+  const { repository, refreshBoardsList } = useBoard()
 
   const [phase, setPhase] = useState<ImportPhase>('idle')
   const [file, setFile] = useState<File | null>(null)
@@ -101,6 +101,7 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
         repository
       )
 
+      await refreshBoardsList()
       setImportedBoard(board)
       setPhase('success')
     } catch (e: any) {

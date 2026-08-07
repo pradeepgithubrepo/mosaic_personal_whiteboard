@@ -21,7 +21,8 @@ export function buildImageScene(
   height: number,
   x = 0,
   y = 0,
-  angle = 0
+  angle = 0,
+  locked = false
 ): ExcalidrawScene {
   const fileId = crypto.randomUUID()
   const elementId = crypto.randomUUID()
@@ -50,7 +51,7 @@ export function buildImageScene(
     boundElements: null,
     updated: Date.now(),
     link: null,
-    locked: true,        // locked so users annotate on top rather than move it
+    locked,        // locked flag passed from importer
     fileId,
     scale: [1, 1] as [number, number],
     status: 'saved' as const,
