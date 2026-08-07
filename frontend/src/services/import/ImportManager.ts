@@ -1,5 +1,6 @@
 import { Importer, ImportAnalysis, ImportLog } from './Importer'
-import { StorageProvider, Board } from '../../types'
+import type { ExcalidrawScene } from '../../types'
+import { Board } from '../../types'
 import { BoardRepository } from '../../storage/BoardRepository'
 import { ImageImporter } from './importers/ImageImporter'
 import { SVGImporter } from './importers/SVGImporter'
@@ -9,18 +10,17 @@ import { MipImporter } from './importers/MipImporter'
 
 export class ImportManager {
   private static importers: Importer[] = [
-    new MipImporter(),   // MIP v1.0 ZIP package first
-    new HtmlImporter(),  // HTML first — most specific
+    new MipImporter(),   // MIP v1.0 ZIP package — most specific, check first
+    new HtmlImporter(),  // HTML exports
     new ImageImporter(),
     new SVGImporter(),
-    new PDFImporter()
+    new PDFImporter(),
   ]
 
-  // Registers a new importer (future-proof extensible design)
   public static registerImporter(importer: Importer): void {
     const exists = this.importers.some((i) => i.name === importer.name)
     if (!exists) {
-      this.importers.unshift(importer) // Add to start to allow overrides
+      this.importers.unshift(importer)
     }
   }
 
@@ -36,7 +36,7 @@ export class ImportManager {
         fileSize: file.size,
         mimeType: file.type,
         isValid: false,
-        error: `Unsupported file format. Only PNG, JPEG, SVG, and PDF are supported.`,
+        error: 'Unsupported file format. Supported: MIP Package (.zip), HTML, PNG, JPEG, SVG, PDF.',
       }
     }
     try {
@@ -55,7 +55,6 @@ export class ImportManager {
   public static async importFile(
     file: File,
     onProgress: (phase: string, percent: number) => void,
-    storage: StorageProvider,
     repository: BoardRepository
   ): Promise<Board> {
     const startTime = Date.now()
@@ -64,67 +63,52 @@ export class ImportManager {
       throw new Error(`Unsupported file type: ${file.name}`)
     }
 
-    let boardId = crypto.randomUUID()
-    let elements: any = null
-    let errorMsg = ''
-    let assetsCount = 0
+    const boardId = crypto.randomUUID()
 
     try {
       onProgress('Preparing Workspace...', 5)
-      // Run importer which returns serialized elements snapshot
-      elements = await importer.import(file, (phase, pct) => {
-        onProgress(phase, 10 + pct * 0.8) // map importer progress to 10% - 90% range
-      }, storage)
+
+      // Importers now return ExcalidrawScene directly — no storage wrapper needed
+      const scene: ExcalidrawScene = await importer.import(file, (phase, pct) => {
+        onProgress(phase, 10 + pct * 0.8)
+      })
 
       onProgress('Generating Whiteboard...', 92)
-      // Count assets from ImportResult format
-      if (elements && Array.isArray(elements.importedAssets)) {
-        assetsCount = elements.importedAssets.length
-      }
 
       const now = new Date().toISOString()
       const title = file.name.substring(0, file.name.lastIndexOf('.')) || file.name
-      
+
       const importedBoard: Board = {
         id: boardId,
-        title: title,
+        title,
         createdAt: now,
         updatedAt: now,
-        elements: elements,
+        elements: scene,
         metadata: {
           description: `Imported from ${file.name} (${importer.name})`,
           tags: ['imported', importer.name.toLowerCase()],
         },
       }
 
-      // Add custom migration fields (as requested)
-      const boardWithMigrationMeta = {
-        ...importedBoard,
-        source: 'Microsoft Whiteboard',
-        importType: importer.name,
-        schemaVersion: 1,
-      } as Board
-
       onProgress('Saving to Storage...', 95)
-      // Save board via repository
-      await repository.save(boardWithMigrationMeta)
-      
+      await repository.save(importedBoard)
+
       onProgress('Completed', 100)
-      
+
       this.logImport({
         id: crypto.randomUUID(),
         importDate: now,
         originalFileName: file.name,
         importType: importer.name,
-        boardId: boardId,
-        assetsCount,
+        boardId,
+        assetsCount: Object.keys(scene.files ?? {}).length,
         durationMs: Date.now() - startTime,
         status: 'success',
       })
 
-      return boardWithMigrationMeta
+      return importedBoard
     } catch (e: any) {
-      errorMsg = e.message || 'Import failed midway.'
+      const errorMsg = e.message || 'Import failed midway.'
       this.logImport({
         id: crypto.randomUUID(),
         importDate: new Date().toISOString(),
@@ -140,16 +124,11 @@ export class ImportManager {
     }
   }
 
-  // Logs imports into localstorage
   private static logImport(entry: ImportLog): void {
     const logsStr = localStorage.getItem('whiteboard_import_logs')
     let logs: ImportLog[] = []
     if (logsStr) {
-      try {
-        logs = JSON.parse(logsStr)
-      } catch {
-        logs = []
-      }
+      try { logs = JSON.parse(logsStr) } catch { logs = [] }
     }
     logs.unshift(entry)
     localStorage.setItem('whiteboard_import_logs', JSON.stringify(logs))
@@ -158,10 +137,6 @@ export class ImportManager {
   public static getImportLogs(): ImportLog[] {
     const logsStr = localStorage.getItem('whiteboard_import_logs')
     if (!logsStr) return []
-    try {
-      return JSON.parse(logsStr)
-    } catch {
-      return []
-    }
+    try { return JSON.parse(logsStr) } catch { return [] }
   }
 }

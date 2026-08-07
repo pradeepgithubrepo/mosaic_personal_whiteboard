@@ -1,7 +1,7 @@
 import JSZip from 'jszip'
 import { Importer, ImportAnalysis } from '../Importer'
-import { StorageProvider } from '../../../types'
-import { ImportResult, ImportedAsset, ImportedShape } from './ImageImporter'
+import type { ExcalidrawScene } from '../../../types'
+import { buildImageScene } from './ImageImporter'
 
 export interface MipManifest {
   schemaVersion: string
@@ -54,16 +54,10 @@ export class MipImporter implements Importer {
     )
   }
 
-  // Find a file entry in the JSZip instance flexibly
   private findZipFile(zip: JSZip, targetPath: string): JSZip.JSZipObject | null {
-    // Exact match first
     if (zip.file(targetPath)) return zip.file(targetPath)!
-    
-    // Normalize path separators
     const normalized = targetPath.replace(/\\/g, '/')
     if (zip.file(normalized)) return zip.file(normalized)!
-
-    // Match filename suffix
     const basename = normalized.split('/').pop()
     for (const relativePath of Object.keys(zip.files)) {
       if (relativePath.endsWith(basename!)) {
@@ -73,7 +67,6 @@ export class MipImporter implements Importer {
     return null
   }
 
-  // Helper to compute SHA-256 checksum of a Blob
   private async computeSha256(blob: Blob): Promise<string> {
     const arrayBuffer = await blob.arrayBuffer()
     const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer)
@@ -82,10 +75,8 @@ export class MipImporter implements Importer {
       .join('')
   }
 
-  // Flexible parser for assets.json (supports Array, Object with .assets array, or Object dictionary)
   private parseAssetsList(assetsRaw: any): MipAssetEntry[] {
     if (!assetsRaw) return []
-
     if (Array.isArray(assetsRaw)) {
       return assetsRaw.map((item, idx) => ({
         id: String(item.id || item.assetId || item.name || `asset-${idx}`),
@@ -97,14 +88,8 @@ export class MipImporter implements Importer {
         height: Number(item.height || item.h || 0),
       }))
     }
-
-    if (Array.isArray(assetsRaw.assets)) {
-      return this.parseAssetsList(assetsRaw.assets)
-    }
-    if (Array.isArray(assetsRaw.items)) {
-      return this.parseAssetsList(assetsRaw.items)
-    }
-
+    if (Array.isArray(assetsRaw.assets)) return this.parseAssetsList(assetsRaw.assets)
+    if (Array.isArray(assetsRaw.items)) return this.parseAssetsList(assetsRaw.items)
     if (typeof assetsRaw === 'object' && assetsRaw !== null) {
       return Object.entries(assetsRaw).map(([key, item]: [string, any], idx) => {
         const objVal = typeof item === 'object' && item !== null ? item : {}
@@ -119,11 +104,9 @@ export class MipImporter implements Importer {
         }
       })
     }
-
     return []
   }
 
-  // Flexible parser for board.json (supports Array, Object with .objects array, or Object dictionary)
   private parseObjectsList(boardRaw: any): MipBoardObject[] {
     if (!boardRaw) return []
     if (Array.isArray(boardRaw)) return boardRaw as MipBoardObject[]
@@ -139,12 +122,7 @@ export class MipImporter implements Importer {
             id: String(v.id || key),
             type: String(v.type || 'image'),
             assetId: String(v.assetId || v.asset || key),
-            bounds: v.bounds || {
-              x: v.x ?? null,
-              y: v.y ?? null,
-              width: v.width || v.w || 0,
-              height: v.height || v.h || 0,
-            },
+            bounds: v.bounds || { x: v.x ?? null, y: v.y ?? null, width: v.width || v.w || 0, height: v.height || v.h || 0 },
             rotation: Number(v.rotation || 0),
             layer: Number(v.layer || 0),
             style: String(v.style || ''),
@@ -158,75 +136,40 @@ export class MipImporter implements Importer {
     return []
   }
 
-  // Multi-tier fallback asset resolver to match assetId references robustly
-  private resolveAssetFromLookup(
-    assetLookup: Map<string, { assetId: string; src: string; width: number; height: number; mime: string; fileName?: string }>,
+  private resolveAsset(
+    assetLookup: Map<string, { dataURL: string; width: number; height: number; mime: string }>,
     targetId: string,
     assetsList: MipAssetEntry[]
-  ): { assetId: string; src: string; width: number; height: number; mime: string; fileName?: string } | null {
+  ): { dataURL: string; width: number; height: number; mime: string } | null {
     if (!targetId) return null
-
-    // Tier 1: Direct exact match
-    if (assetLookup.has(targetId)) {
-      return assetLookup.get(targetId)!
-    }
-
-    // Tier 2: Case-insensitive / trimmed match
+    if (assetLookup.has(targetId)) return assetLookup.get(targetId)!
     const lowerTarget = String(targetId).toLowerCase().trim()
     for (const [k, val] of assetLookup.entries()) {
-      if (k.toLowerCase().trim() === lowerTarget) {
-        return val
-      }
+      if (k.toLowerCase().trim() === lowerTarget) return val
     }
-
-    // Tier 3: Stripped numeric ID match (e.g., targetId "asset-0000" vs key "0000" or "0")
     const numTarget = lowerTarget.replace(/[^0-9]/g, '')
     if (numTarget) {
       for (const [k, val] of assetLookup.entries()) {
         const numK = k.toLowerCase().replace(/[^0-9]/g, '')
-        if (numK && (numTarget === numK || parseInt(numTarget, 10) === parseInt(numK, 10))) {
-          return val
-        }
+        if (numK && (numTarget === numK || parseInt(numTarget, 10) === parseInt(numK, 10))) return val
       }
-    }
-
-    // Tier 4: Filename match
-    for (const [, val] of assetLookup.entries()) {
-      if (val.fileName && lowerTarget.includes(val.fileName.toLowerCase())) {
-        return val
-      }
-    }
-
-    // Tier 5: Index-based fallback (e.g. targetId asset-0000 -> index 0 in assetsList)
-    if (numTarget) {
       const idx = parseInt(numTarget, 10)
       if (!isNaN(idx) && idx >= 0 && idx < assetsList.length) {
         const entry = assetsList[idx]
-        if (entry && assetLookup.has(entry.id)) {
-          return assetLookup.get(entry.id)!
-        }
+        if (entry && assetLookup.has(entry.id)) return assetLookup.get(entry.id)!
       }
     }
-
-    // Tier 6: Single-entry fallback if total assets === 1
-    if (assetLookup.size === 1) {
-      return assetLookup.values().next().value!
-    }
-
+    if (assetLookup.size === 1) return assetLookup.values().next().value!
     return null
   }
 
   public async analyze(file: File): Promise<ImportAnalysis> {
     try {
       const zip = await JSZip.loadAsync(file)
-
-      // Step 1: Validate Package Files
       const manifestFile = this.findZipFile(zip, 'manifest.json')
       const boardFile = this.findZipFile(zip, 'board.json')
       const assetsFile = this.findZipFile(zip, 'assets.json')
       const diagnosticsFile = this.findZipFile(zip, 'diagnostics.json')
-
-      // Check for images directory or image files
       const hasImagesFolder = Object.keys(zip.files).some((f) => f.startsWith('images/') || f.includes('/images/'))
 
       if (!manifestFile || !boardFile || !assetsFile || !diagnosticsFile || !hasImagesFolder) {
@@ -236,61 +179,31 @@ export class MipImporter implements Importer {
         if (!assetsFile) missing.push('assets.json')
         if (!diagnosticsFile) missing.push('diagnostics.json')
         if (!hasImagesFolder) missing.push('images/ folder')
-
-        return {
-          fileName: file.name,
-          fileSize: file.size,
-          mimeType: 'application/zip',
-          isValid: false,
-          error: `Invalid MIP v1.0 package. Missing required files: ${missing.join(', ')}.`,
-        }
+        return { fileName: file.name, fileSize: file.size, mimeType: 'application/zip', isValid: false, error: `Invalid MIP v1.0 package. Missing: ${missing.join(', ')}.` }
       }
 
-      // Step 2: Read manifest.json
-      const manifestStr = await manifestFile.async('string')
-      const manifest: MipManifest = JSON.parse(manifestStr)
-
+      const manifest: MipManifest = JSON.parse(await manifestFile.async('string'))
       if (manifest.schemaVersion !== '1.0') {
-        return {
-          fileName: file.name,
-          fileSize: file.size,
-          mimeType: 'application/zip',
-          isValid: false,
-          error: `Unsupported MIP schemaVersion "${manifest.schemaVersion}". Importer requires version 1.0.`,
-        }
+        return { fileName: file.name, fileSize: file.size, mimeType: 'application/zip', isValid: false, error: `Unsupported MIP schemaVersion "${manifest.schemaVersion}". Requires 1.0.` }
       }
 
-      // Read objects count
-      const boardStr = await boardFile.async('string')
-      const boardRaw = JSON.parse(boardStr)
-      const objects = this.parseObjectsList(boardRaw)
-
+      const objects = this.parseObjectsList(JSON.parse(await boardFile.async('string')))
       return {
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: 'application/zip',
+        fileName: file.name, fileSize: file.size, mimeType: 'application/zip',
         pagesCount: objects.length,
         estimatedBoardSize: { width: 1920, height: Math.max(1080, objects.length * 600) },
-        estimatedUploadSize: file.size,
-        isValid: true,
+        estimatedUploadSize: file.size, isValid: true,
       }
     } catch (e: any) {
-      return {
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: 'application/zip',
-        isValid: false,
-        error: e.message || 'Corrupted or unreadable ZIP archive.',
-      }
+      return { fileName: file.name, fileSize: file.size, mimeType: 'application/zip', isValid: false, error: e.message || 'Corrupted or unreadable ZIP archive.' }
     }
   }
 
   public async import(
     file: File,
-    onProgress: (phase: string, percent: number) => void,
-    storage: StorageProvider
-  ): Promise<ImportResult> {
-    onProgress('Step 1: Opening & Validating MIP Package...', 5)
+    onProgress: (phase: string, percent: number) => void
+  ): Promise<ExcalidrawScene> {
+    onProgress('Opening & Validating MIP Package...', 5)
     const zip = await JSZip.loadAsync(file)
 
     const manifestFile = this.findZipFile(zip, 'manifest.json')
@@ -309,161 +222,94 @@ export class MipImporter implements Importer {
       throw new Error(`Validation failed: Missing required MIP files (${missing.join(', ')}).`)
     }
 
-    // Step 2: Read manifest.json
-    onProgress('Step 2: Reading manifest.json...', 10)
-    const manifestStr = await manifestFile.async('string')
-    const manifest: MipManifest = JSON.parse(manifestStr)
-
+    onProgress('Reading manifest...', 10)
+    const manifest: MipManifest = JSON.parse(await manifestFile.async('string'))
     if (manifest.schemaVersion !== '1.0') {
       throw new Error(`Unsupported MIP schemaVersion "${manifest.schemaVersion}". Required: "1.0".`)
     }
 
-    // Step 3: Read assets.json & Upload Images
-    onProgress('Step 3: Reading assets & verifying checksums...', 20)
-    const assetsStr = await assetsFile.async('string')
-    const assetsRaw = JSON.parse(assetsStr)
+    // Read & encode all assets as base64 data URLs
+    onProgress('Reading assets...', 20)
+    const assetsRaw = JSON.parse(await assetsFile.async('string'))
     const assetsList = this.parseAssetsList(assetsRaw)
 
-    const assetLookup = new Map<string, { assetId: string; src: string; width: number; height: number; mime: string; fileName?: string }>()
-    const importedAssets: ImportedAsset[] = []
+    const assetLookup = new Map<string, { dataURL: string; width: number; height: number; mime: string }>()
 
     for (let i = 0; i < assetsList.length; i++) {
       const asset = assetsList[i]
-      const stepPct = 20 + Math.round((i / assetsList.length) * 35)
-      onProgress(`Uploading asset ${i + 1} of ${assetsList.length} (${asset.id})...`, stepPct)
+      onProgress(`Encoding asset ${i + 1} of ${assetsList.length}...`, 20 + Math.round((i / assetsList.length) * 35))
 
       const imageZipEntry = this.findZipFile(zip, asset.file)
-      if (!imageZipEntry) {
-        throw new Error(`Asset file missing in package: "${asset.file}" (ID: ${asset.id})`)
-      }
+      if (!imageZipEntry) throw new Error(`Asset file missing in package: "${asset.file}" (ID: ${asset.id})`)
 
       const mimeType = asset.mime || 'image/png'
-      const imageBlob = await imageZipEntry.async('blob')
-      const blobWithMime = new Blob([imageBlob], { type: mimeType })
+      const imageBlob = new Blob([await imageZipEntry.async('blob')], { type: mimeType })
 
-      // Verify SHA-256 checksum if present
       if (asset.sha256) {
-        const computedSha = await this.computeSha256(blobWithMime)
+        const computedSha = await this.computeSha256(imageBlob)
         if (computedSha.toLowerCase() !== asset.sha256.toLowerCase()) {
-          console.warn(`Checksum mismatch for asset ${asset.id}: expected ${asset.sha256}, got ${computedSha}`)
+          console.warn(`Checksum mismatch for asset ${asset.id}`)
         }
       }
 
-      const fileName = asset.file.split('/').pop() || `${asset.id}.png`
-      const assetId = await storage.uploadAsset(fileName, mimeType, blobWithMime)
-
-      const downloadedBlob = await storage.downloadAsset(assetId)
-      const src = URL.createObjectURL(downloadedBlob)
-
-      const lookupRecord = {
-        assetId,
-        src,
-        width: asset.width,
-        height: asset.height,
-        mime: mimeType,
-        fileName,
-      }
-
-      assetLookup.set(asset.id, lookupRecord)
-
-      importedAssets.push({
-        assetId,
-        src,
-        fileName,
-        mimeType,
-        width: asset.width,
-        height: asset.height,
+      // Convert to base64 data URL
+      const dataURL = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(new Error('Failed to encode asset'))
+        reader.readAsDataURL(imageBlob)
       })
+
+      assetLookup.set(asset.id, { dataURL, width: asset.width, height: asset.height, mime: mimeType })
     }
 
-    // Step 4: Read board.json
-    onProgress('Step 4: Reading board layout...', 60)
-    const boardStr = await boardFile.async('string')
-    const boardRaw = JSON.parse(boardStr)
-    const objectsList = this.parseObjectsList(boardRaw)
-
-    // Step 8: Layer Order Sorting (Ascending)
-    onProgress('Step 8: Sorting objects by layer...', 70)
+    // Read board layout
+    onProgress('Reading board layout...', 60)
+    const objectsList = this.parseObjectsList(JSON.parse(await boardFile.async('string')))
     const sortedObjects = [...objectsList].sort((a, b) => (a.layer ?? 0) - (b.layer ?? 0))
 
-    // Step 5-13: Resolve Assets, Construct Shapes, Apply Position / Fallback / Rotation / Meta
-    onProgress('Step 6-13: Reconstructing TLDraw shapes...', 80)
-    const importedShapes: ImportedShape[] = []
+    // Build Excalidraw scene
+    onProgress('Reconstructing canvas shapes...', 80)
+    const allElements: any[] = []
+    const allFiles: Record<string, any> = {}
     let fallbackY = 0
 
     for (const obj of sortedObjects) {
-      // Step 5: Resolve Asset using multi-tier lookup
-      const resolvedAsset = this.resolveAssetFromLookup(assetLookup, obj.assetId, assetsList)
-      if (!resolvedAsset) {
-        throw new Error(`Asset ID "${obj.assetId}" referenced by object "${obj.id}" not found in assetLookup.`)
-      }
+      const resolved = this.resolveAsset(assetLookup, obj.assetId, assetsList)
+      if (!resolved) throw new Error(`Asset ID "${obj.assetId}" referenced by object "${obj.id}" not found.`)
 
-      // Step 10: Width & Height
-      const width = obj.bounds?.width ?? resolvedAsset.width
-      const height = obj.bounds?.height ?? resolvedAsset.height
+      const width = obj.bounds?.width ?? resolved.width
+      const height = obj.bounds?.height ?? resolved.height
+      const angle = ((obj.rotation ?? 0) * Math.PI) / 180
 
-      // Step 9: Rotation
-      const rotation = obj.rotation ?? 0
-
-      // Step 7: Position resolution
-      let x = 0
-      let y = 0
-
-      if (
-        obj.bounds &&
-        obj.bounds.x !== null &&
-        obj.bounds.x !== undefined &&
-        obj.bounds.y !== null &&
-        obj.bounds.y !== undefined
-      ) {
+      let x = 0, y = 0
+      if (obj.bounds?.x != null && obj.bounds?.y != null) {
         x = obj.bounds.x
         y = obj.bounds.y
       } else {
-        // Fallback vertical stack positioning (Step 7)
-        x = 0
         y = fallbackY
-        fallbackY += height + 100 // 100px gap
+        fallbackY += height + 100
       }
 
-      // Step 11-13: Metadata (style, parent, domIndex)
-      const meta: Record<string, any> = {
-        originalId: obj.id,
-        originalStyle: obj.style || '',
-        parent: obj.parent || 'div',
-        domIndex: obj.domIndex ?? 0,
-        layer: obj.layer ?? 0,
-      }
-
-      importedShapes.push({
-        assetId: resolvedAsset.assetId,
-        x,
-        y,
-        width,
-        height,
-        rotation,
-        meta,
-      })
+      const scene = buildImageScene(resolved.dataURL, resolved.mime, width, height, x, y, angle)
+      allElements.push(...scene.elements)
+      Object.assign(allFiles, scene.files)
     }
 
-    // Step 14: Diagnostics
+    // Read diagnostics (non-blocking)
     if (diagnosticsFile) {
       try {
-        const diagStr = await diagnosticsFile.async('string')
-        const diagnostics = JSON.parse(diagStr)
-        if (diagnostics.warnings && Array.isArray(diagnostics.warnings)) {
-          console.warn('MIP Import Diagnostics Warnings:', diagnostics.warnings)
-        }
-      } catch {
-        // Diagnostics read error non-blocking
-      }
+        const diagnostics = JSON.parse(await diagnosticsFile.async('string'))
+        if (diagnostics.warnings?.length) console.warn('MIP Diagnostics:', diagnostics.warnings)
+      } catch { /* non-critical */ }
     }
 
-    onProgress('Step 15: Board Assembly Completed', 98)
+    onProgress('Board assembly complete!', 98)
 
     return {
-      _importResult: true,
-      importedAssets,
-      importedShapes,
+      elements: allElements,
+      appState: { viewBackgroundColor: '#ffffff' },
+      files: allFiles,
     }
   }
 }

@@ -1,15 +1,11 @@
 /**
  * HtmlImporter.ts
- * Top-level implementation of the Importer interface for Microsoft Whiteboard
- * HTML exports. Orchestrates all sub-modules:
- *   HtmlParser → ImportValidator → AssetExtractor → BoardBuilder → ImportResult
- *
- * After import the board is 100% independent of the original HTML file.
+ * Orchestrates all sub-modules for Microsoft Whiteboard HTML exports:
+ *   HtmlParser → ImportValidator → AssetExtractor → BoardBuilder → ExcalidrawScene
  */
 
 import { Importer, ImportAnalysis } from '../Importer'
-import { StorageProvider } from '../../../types'
-import { ImportResult } from '../importers/ImageImporter'
+import type { ExcalidrawScene } from '../../../types'
 import { parseHtml } from './HtmlParser'
 import { validateWhiteboardHtml } from './ImportValidator'
 import { extractAssets } from './AssetExtractor'
@@ -40,51 +36,35 @@ export class HtmlImporter implements Importer {
   public async analyze(file: File): Promise<ImportAnalysis> {
     try {
       const html = await this.readFile(file)
-      const { doc, title: _title, canvasWidth, canvasHeight } = parseHtml(html, file.name)
+      const { doc, canvasWidth, canvasHeight } = parseHtml(html, file.name)
       const validation = validateWhiteboardHtml(doc, file.name)
 
       if (!validation.valid) {
-        return {
-          fileName: file.name,
-          fileSize: file.size,
-          mimeType: file.type || 'text/html',
-          isValid: false,
-          error: validation.reason,
-        }
+        return { fileName: file.name, fileSize: file.size, mimeType: file.type || 'text/html', isValid: false, error: validation.reason }
       }
 
       const assets = extractAssets(doc)
       const imageCount = assets.filter((a) => a.kind === 'image').length
       const svgCount = assets.filter((a) => a.kind === 'svg').length
-      // Rough upload estimate: assume 50 % of raw file size for compressed images
-      const estimatedUploadSize = Math.round(file.size * 0.6)
 
       return {
         fileName: file.name,
         fileSize: file.size,
         mimeType: file.type || 'text/html',
         estimatedBoardSize: { width: canvasWidth, height: canvasHeight },
-        estimatedUploadSize,
-        // pagesCount re-purposed to communicate total asset objects detected
+        estimatedUploadSize: Math.round(file.size * 0.6),
         pagesCount: imageCount + svgCount,
         isValid: true,
       }
     } catch (e: any) {
-      return {
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type || 'text/html',
-        isValid: false,
-        error: e.message || 'Failed to analyse HTML file.',
-      }
+      return { fileName: file.name, fileSize: file.size, mimeType: file.type || 'text/html', isValid: false, error: e.message || 'Failed to analyse HTML file.' }
     }
   }
 
   public async import(
     file: File,
-    onProgress: (phase: string, percent: number) => void,
-    storage: StorageProvider
-  ): Promise<ImportResult> {
+    onProgress: (phase: string, percent: number) => void
+  ): Promise<ExcalidrawScene> {
     const reporter = new ImportReporter(file.name)
 
     onProgress('Reading HTML file...', 5)
@@ -98,9 +78,7 @@ export class HtmlImporter implements Importer {
 
     onProgress('Validating export...', 15)
     const validation = validateWhiteboardHtml(doc, file.name)
-    if (!validation.valid) {
-      throw new Error(validation.reason || 'Invalid HTML export.')
-    }
+    if (!validation.valid) throw new Error(validation.reason || 'Invalid HTML export.')
     reporter.log(`Validation passed. Title: "${title}"`)
 
     onProgress('Extracting assets...', 20)
@@ -113,32 +91,23 @@ export class HtmlImporter implements Importer {
     reporter.log(`Detected ${imageAssets.length} images, ${svgAssets.length} SVGs`)
 
     if (rawAssets.length === 0) {
-      throw new Error(
-        'No visual assets found in this HTML file. The whiteboard may be empty or use an unsupported format.'
-      )
+      throw new Error('No visual assets found in this HTML file. The whiteboard may be empty or use an unsupported format.')
     }
 
-    onProgress(`Uploading ${rawAssets.length} assets...`, 35)
-    const result = await buildBoard(rawAssets, {
-      storage,
-      reporter,
-      onProgress,
-    })
+    onProgress(`Processing ${rawAssets.length} assets...`, 35)
+    const scene = await buildBoard(rawAssets, { reporter, onProgress })
 
     const report = reporter.finish()
     reporter.log(
-      `Import complete: ${report.assetsUploaded} uploaded, ` +
+      `Import complete: ${report.assetsUploaded} encoded, ` +
         `${report.duplicatesSkipped} duplicates skipped, ` +
         `${report.generatedBoardObjects} board objects generated in ${report.totalDurationMs}ms`
     )
 
-    // Persist report to sessionStorage for diagnostics
     try {
       sessionStorage.setItem('whiteboard_last_html_import_report', JSON.stringify(report))
-    } catch {
-      // storage quota — not critical
-    }
+    } catch { /* storage quota — not critical */ }
 
-    return result
+    return scene
   }
 }

@@ -1,4 +1,4 @@
-import { StorageProvider } from '../../types'
+import type { ExcalidrawScene } from '../../types'
 
 export interface ImportAnalysis {
   fileName: string
@@ -6,7 +6,7 @@ export interface ImportAnalysis {
   mimeType: string
   estimatedBoardSize?: { width: number; height: number }
   estimatedUploadSize?: number
-  pagesCount?: number // Only for PDFs
+  pagesCount?: number // Only for PDFs / multi-asset imports
   isValid: boolean
   error?: string
 }
@@ -28,9 +28,13 @@ export interface Importer {
   supportedMimeTypes: string[]
   supports(file: File): boolean
   analyze(file: File): Promise<ImportAnalysis>
+  /**
+   * Convert a file into an ExcalidrawScene that can be saved directly as
+   * board.elements. Images are embedded as base64 data URLs inside the
+   * scene's `files` map — no separate Drive asset upload is required.
+   */
   import(
     file: File,
-    onProgress: (phase: string, percent: number) => void,
-    storage: StorageProvider
-  ): Promise<any> // Returns elements record mapping for tldraw snapshot
+    onProgress: (phase: string, percent: number) => void
+  ): Promise<ExcalidrawScene>
 }

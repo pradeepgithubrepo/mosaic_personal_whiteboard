@@ -1,6 +1,6 @@
 import { Importer, ImportAnalysis } from '../Importer'
-import { StorageProvider } from '../../../types'
-import { ImportResult, ImportedAsset, ImportedShape } from './ImageImporter'
+import type { ExcalidrawScene } from '../../../types'
+import { fileToDataURL, buildImageScene } from './ImageImporter'
 
 export class SVGImporter implements Importer {
   public name = 'SVG Importer'
@@ -60,29 +60,16 @@ export class SVGImporter implements Importer {
 
   public async import(
     file: File,
-    onProgress: (phase: string, percent: number) => void,
-    storage: StorageProvider
-  ): Promise<ImportResult> {
+    onProgress: (phase: string, percent: number) => void
+  ): Promise<ExcalidrawScene> {
     onProgress('Parsing SVG geometry...', 20)
     const dims = await this.parseSvgDimensions(file)
 
-    onProgress('Uploading SVG to workspace...', 50)
-    const assetId = await storage.uploadAsset(file.name, 'image/svg+xml', file)
-
-    onProgress('Building blob URL for rendering...', 75)
-    const downloadedBlob = await storage.downloadAsset(assetId)
-    const src = URL.createObjectURL(downloadedBlob)
+    onProgress('Encoding SVG as base64...', 60)
+    const dataURL = await fileToDataURL(file)
 
     onProgress('Constructing canvas layout...', 90)
-
-    const importedAssets: ImportedAsset[] = [
-      { assetId, src, fileName: file.name, mimeType: 'image/svg+xml', width: dims.width, height: dims.height },
-    ]
-
-    const importedShapes: ImportedShape[] = [
-      { assetId, x: 0, y: 0, width: dims.width, height: dims.height },
-    ]
-
-    return { _importResult: true, importedAssets, importedShapes }
+    // SVGs render best as image/svg+xml; Excalidraw supports them natively
+    return buildImageScene(dataURL, 'image/svg+xml', dims.width, dims.height)
   }
 }

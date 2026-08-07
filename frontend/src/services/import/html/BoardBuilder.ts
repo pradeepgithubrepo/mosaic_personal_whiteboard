@@ -1,21 +1,19 @@
 /**
  * BoardBuilder.ts
- * Converts extracted raw assets (with positions) into the ImportResult format
- * that CanvasPage understands — without any knowledge of tldraw internals.
+ * Converts extracted raw assets (with positions) into an ExcalidrawScene.
+ * Images are stored inline as base64 data URLs — no Drive asset upload needed.
  *
- * It also handles:
+ * Handles:
  *  • coordinate normalisation (origin at 0,0)
- *  • z-index ordering (shapes are created lowest-z first)
- *  • checksum-based deduplication (via the provided checksumIndex)
+ *  • z-index ordering (shapes created lowest-z first)
+ *  • SHA-256 deduplication (reuses fileId for identical blobs)
  */
 
 import { RawAsset } from './AssetExtractor'
 import { normalisePositions, ElementPosition } from './PositionExtractor'
-import { ImportedAsset, ImportedShape, ImportResult } from '../importers/ImageImporter'
-import { StorageProvider } from '../../../types'
+import type { ExcalidrawScene } from '../../../types'
+import { buildImageScene } from '../importers/ImageImporter'
 import { ImportReporter } from './ImportReport'
-
-// ─── SHA-256 via Web Crypto ────────────────────────────────────────────────
 
 async function sha256(blob: Blob): Promise<string> {
   const buffer = await blob.arrayBuffer()
@@ -25,40 +23,29 @@ async function sha256(blob: Blob): Promise<string> {
     .join('')
 }
 
-// Persistent checksum → assetId cache in localStorage (scoped per storage provider)
-function loadChecksumIndex(providerName: string): Record<string, string> {
-  try {
-    return JSON.parse(localStorage.getItem(`whiteboard_asset_checksums_${providerName}`) || '{}')
-  } catch {
-    return {}
-  }
-}
-
-function saveChecksumIndex(providerName: string, index: Record<string, string>) {
-  localStorage.setItem(`whiteboard_asset_checksums_${providerName}`, JSON.stringify(index))
-}
-
-// ─── Blob resolution ──────────────────────────────────────────────────────
-
 async function srcToBlob(src: string, mimeType: string): Promise<Blob> {
   if (src.startsWith('data:')) {
-    // Base64 data URL
     const [, b64] = src.split(',')
     const binary = atob(b64)
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
     return new Blob([bytes], { type: mimeType })
   }
-  // Regular URL (relative or absolute)
   const response = await fetch(src)
   if (!response.ok) throw new Error(`Failed to fetch asset: ${src} (${response.status})`)
   return response.blob()
 }
 
-// ─── Main builder ─────────────────────────────────────────────────────────
+function blobToDataURL(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(new Error('Failed to encode blob as data URL'))
+    reader.readAsDataURL(blob)
+  })
+}
 
 export interface BuildOptions {
-  storage: StorageProvider
   reporter: ImportReporter
   onProgress: (phase: string, pct: number) => void
 }
@@ -66,20 +53,18 @@ export interface BuildOptions {
 export async function buildBoard(
   rawAssets: RawAsset[],
   options: BuildOptions
-): Promise<ImportResult> {
-  const { storage, reporter, onProgress } = options
+): Promise<ExcalidrawScene> {
+  const { reporter, onProgress } = options
 
-  // Sort by z-index so lower z-order shapes are created first (painter's algorithm)
   const sorted = [...rawAssets].sort((a, b) => a.position.zIndex - b.position.zIndex)
-
-  // Normalise positions so top-left element starts at (0, 0)
   const positions: ElementPosition[] = sorted.map((a) => a.position)
   const normPos = normalisePositions(positions)
 
-  const providerName = storage.name || 'local'
-  const checksumIndex = loadChecksumIndex(providerName)
-  const importedAssets: ImportedAsset[] = []
-  const importedShapes: ImportedShape[] = []
+  // Checksum deduplication: identical images share the same fileId
+  const checksumToFileId = new Map<string, string>()
+
+  const allElements: any[] = []
+  const allFiles: Record<string, any> = {}
 
   reporter.startUploadTimer()
 
@@ -87,8 +72,7 @@ export async function buildBoard(
     const raw = sorted[i]
     const pos = normPos[i]
     const pct = Math.round(40 + (i / sorted.length) * 50)
-
-    onProgress(`Uploading asset ${i + 1} of ${sorted.length}: ${raw.fileName}`, pct)
+    onProgress(`Processing asset ${i + 1} of ${sorted.length}: ${raw.fileName}`, pct)
 
     let blob: Blob
     try {
@@ -98,59 +82,41 @@ export async function buildBoard(
       continue
     }
 
-    // Checksum deduplication
     const checksum = await sha256(blob)
-    const existingAssetId = checksumIndex[checksum]
+    let dataURL: string
 
-    let assetId: string
-    let blobUrl: string
-
-    if (existingAssetId) {
+    if (checksumToFileId.has(checksum)) {
+      // Duplicate — reuse the existing dataURL from allFiles
+      const existingFileId = checksumToFileId.get(checksum)!
+      dataURL = allFiles[existingFileId]?.dataURL
       reporter.incrementDuplicatesSkipped()
-      reporter.log(`Duplicate detected for "${raw.fileName}" — reusing asset ${existingAssetId}`)
-      assetId = existingAssetId
-      // Still need a blob URL for immediate rendering
-      try {
-        const existingBlob = await storage.downloadAsset(assetId)
-        blobUrl = URL.createObjectURL(existingBlob)
-      } catch {
-        blobUrl = URL.createObjectURL(blob)
-      }
+      reporter.log(`Duplicate "${raw.fileName}" — reusing fileId ${existingFileId}`)
     } else {
-      assetId = await storage.uploadAsset(raw.fileName, raw.mimeType, blob)
-      checksumIndex[checksum] = assetId
+      dataURL = await blobToDataURL(blob)
       reporter.incrementAssetsUploaded()
-      reporter.log(`Uploaded "${raw.fileName}" → assetId: ${assetId}`)
-
-      const downloadedBlob = await storage.downloadAsset(assetId)
-      blobUrl = URL.createObjectURL(downloadedBlob)
+      reporter.log(`Encoded "${raw.fileName}"`)
     }
 
-    // Determine final width/height — use extracted size or fall back to position bounds
     const width = raw.width > 0 ? raw.width : pos.width
     const height = raw.height > 0 ? raw.height : pos.height
 
-    importedAssets.push({
-      assetId,
-      src: blobUrl,
-      fileName: raw.fileName,
-      mimeType: raw.mimeType,
-      width,
-      height,
-    })
+    const scene = buildImageScene(dataURL, raw.mimeType, width, height, pos.x, pos.y)
+    // Track new fileId for deduplication
+    const fileId = Object.keys(scene.files)[0]
+    if (!checksumToFileId.has(checksum)) {
+      checksumToFileId.set(checksum, fileId)
+    }
 
-    importedShapes.push({
-      assetId,
-      x: pos.x,
-      y: pos.y,
-      width,
-      height,
-    })
+    allElements.push(...scene.elements)
+    Object.assign(allFiles, scene.files)
   }
 
   reporter.stopUploadTimer()
-  saveChecksumIndex(providerName, checksumIndex)
+  reporter.setGeneratedBoardObjects(allElements.length)
 
-  reporter.setGeneratedBoardObjects(importedShapes.length)
-  return { _importResult: true, importedAssets, importedShapes }
+  return {
+    elements: allElements,
+    appState: { viewBackgroundColor: '#ffffff' },
+    files: allFiles,
+  }
 }

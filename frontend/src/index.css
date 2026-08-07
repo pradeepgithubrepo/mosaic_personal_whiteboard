@@ -1,4 +1,5 @@
-@import "tldraw/tldraw.css";
+/* Excalidraw CSS is imported in CanvasPage.tsx */
+
 
 @tailwind base;
 @tailwind components;

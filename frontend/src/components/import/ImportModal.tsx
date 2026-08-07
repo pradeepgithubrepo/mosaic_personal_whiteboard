@@ -15,7 +15,7 @@ type ImportPhase = 'idle' | 'analyzing' | 'preview' | 'importing' | 'success' | 
 
 export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => {
   const navigate = useNavigate()
-  const { repository, downloadAsset, uploadAsset } = useBoard()
+  const { repository } = useBoard()
 
   const [phase, setPhase] = useState<ImportPhase>('idle')
   const [file, setFile] = useState<File | null>(null)
@@ -92,33 +92,12 @@ export const ImportModal: React.FC<ImportModalProps> = ({ isOpen, onClose }) => 
     setProgressMsg('Starting migration flow...')
 
     try {
-      // Pass temporary storage interface wrapper utilizing context wrappers
-      const storageWrapper = {
-        name: 'import-client-wrapper',
-        saveBoard: async () => {},
-        loadBoard: async () => null,
-        deleteBoard: async () => {},
-        listBoards: async () => [],
-        uploadAsset,
-        downloadAsset,
-        deleteAsset: async () => {},
-        authenticate: async () => {},
-        findRootFolder: async () => null,
-        createRootFolder: async () => '',
-        uploadFile: async () => '',
-        downloadFile: async () => '',
-        updateFile: async () => {},
-        deleteFile: async () => {},
-        listFiles: async () => [],
-      }
-
       const board = await ImportManager.importFile(
         file,
         (msg, pct) => {
           setProgressMsg(msg)
           setProgressPercent(pct)
         },
-        storageWrapper,
         repository
       )
 

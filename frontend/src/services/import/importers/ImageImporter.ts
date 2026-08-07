@@ -1,30 +1,76 @@
 import { Importer, ImportAnalysis } from '../Importer'
-import { StorageProvider } from '../../../types'
+import type { ExcalidrawScene } from '../../../types'
 
-export interface ImportedAsset {
-  assetId: string      // the storage asset ID (for asset-id:// references)
-  src: string          // resolved blob URL (for immediate rendering)
-  fileName: string
-  mimeType: string
-  width: number
-  height: number
+// ─── Shared helpers ────────────────────────────────────────────────────────
+
+/** Read a File as a base64 data URL */
+export function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(new Error('Failed to read file as data URL.'))
+    reader.readAsDataURL(file)
+  })
 }
 
-export interface ImportedShape {
-  assetId: string
-  x: number
-  y: number
-  width: number
-  height: number
-  rotation?: number
-  meta?: Record<string, any>
+/** Build one locked ExcalidrawImageElement + its BinaryFiles entry */
+export function buildImageScene(
+  dataURL: string,
+  mimeType: string,
+  width: number,
+  height: number,
+  x = 0,
+  y = 0,
+  angle = 0
+): ExcalidrawScene {
+  const fileId = crypto.randomUUID()
+  const elementId = crypto.randomUUID()
+
+  const element = {
+    type: 'image' as const,
+    id: elementId,
+    x,
+    y,
+    width,
+    height,
+    angle,
+    strokeColor: 'transparent',
+    backgroundColor: 'transparent',
+    fillStyle: 'solid' as const,
+    strokeWidth: 1,
+    strokeStyle: 'solid' as const,
+    roughness: 0,
+    opacity: 100,
+    groupIds: [] as string[],
+    roundness: null,
+    seed: Math.floor(Math.random() * 1e9),
+    version: 1,
+    versionNonce: Math.floor(Math.random() * 1e9),
+    isDeleted: false,
+    boundElements: null,
+    updated: Date.now(),
+    link: null,
+    locked: true,        // locked so users annotate on top rather than move it
+    fileId,
+    scale: [1, 1] as [number, number],
+    status: 'saved' as const,
+  }
+
+  return {
+    elements: [element],
+    appState: { viewBackgroundColor: '#ffffff' },
+    files: {
+      [fileId]: {
+        mimeType,
+        id: fileId,
+        dataURL,
+        created: Date.now(),
+      },
+    },
+  }
 }
 
-export interface ImportResult {
-  _importResult: true
-  importedAssets: ImportedAsset[]
-  importedShapes: ImportedShape[]
-}
+// ─── ImageImporter ─────────────────────────────────────────────────────────
 
 export class ImageImporter implements Importer {
   public name = 'Image Importer'
@@ -74,30 +120,15 @@ export class ImageImporter implements Importer {
 
   public async import(
     file: File,
-    onProgress: (phase: string, percent: number) => void,
-    storage: StorageProvider
-  ): Promise<ImportResult> {
-    onProgress('Analyzing image dimensions...', 20)
+    onProgress: (phase: string, percent: number) => void
+  ): Promise<ExcalidrawScene> {
+    onProgress('Reading image dimensions...', 20)
     const dims = await this.getImageDimensions(file)
 
-    onProgress('Uploading image to workspace...', 40)
-    const assetId = await storage.uploadAsset(file.name, file.type, file)
-
-    onProgress('Building blob URL for rendering...', 70)
-    const downloadedBlob = await storage.downloadAsset(assetId)
-    const src = URL.createObjectURL(downloadedBlob)
+    onProgress('Encoding image as base64...', 60)
+    const dataURL = await fileToDataURL(file)
 
     onProgress('Constructing canvas layout...', 90)
-
-    // Center at origin; CanvasPage will zoomToFit after placing
-    const importedAssets: ImportedAsset[] = [
-      { assetId, src, fileName: file.name, mimeType: file.type, width: dims.width, height: dims.height },
-    ]
-
-    const importedShapes: ImportedShape[] = [
-      { assetId, x: 0, y: 0, width: dims.width, height: dims.height },
-    ]
-
-    return { _importResult: true, importedAssets, importedShapes }
+    return buildImageScene(dataURL, file.type, dims.width, dims.height)
   }
 }

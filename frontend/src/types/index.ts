@@ -13,8 +13,19 @@ export interface BoardHeader {
   thumbnail?: string
 }
 
+/**
+ * Excalidraw scene persisted to Drive / storage.
+ * Mirrors the shape of data returned by Excalidraw's onChange callback
+ * and expected by the initialData prop.
+ */
+export interface ExcalidrawScene {
+  elements: readonly any[]        // ExcalidrawElement[]
+  appState: Record<string, any>   // Partial<AppState>
+  files: Record<string, any>      // BinaryFiles — image data keyed by fileId
+}
+
 export interface Board extends BoardHeader {
-  elements: any // Serialized tldraw canvas shape data (records/snapshot)
+  elements: ExcalidrawScene | null  // null = brand-new empty board
   metadata?: BoardMetadata
 }
 

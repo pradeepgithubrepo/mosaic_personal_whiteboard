@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef, startTransition } from 'react'
-import { Board, BoardHeader, StorageProvider } from '../types'
+import { Board, BoardHeader, ExcalidrawScene, StorageProvider } from '../types'
 import { BoardRepository } from './BoardRepository'
 import { LocalProvider } from './providers/LocalProvider'
 import { GoogleDriveProvider } from './providers/GoogleDriveProvider'
@@ -19,6 +19,7 @@ interface BoardContextType {
   saveActiveBoardElements: (elements: any) => void
   refreshBoardsList: () => Promise<void>
   repository: BoardRepository
+  // Asset helpers kept for ImportModal / importers that still need Drive asset storage
   downloadAsset: (assetId: string) => Promise<Blob>
   uploadAsset: (fileName: string, mimeType: string, data: Blob) => Promise<string>
 }
@@ -31,11 +32,9 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return (saved as 'local' | 'google-drive') || 'local'
   })
 
-  // Instantiate providers
   const localProvider = useRef(new LocalProvider())
   const gdProvider = useRef(new GoogleDriveProvider())
-  
-  // Instantiate Repository
+
   const repositoryRef = useRef<BoardRepository>(
     new BoardRepository(providerName === 'local' ? localProvider.current : gdProvider.current)
   )
@@ -46,27 +45,27 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
-  // Tracks whether a save is already in-flight; avoids calling setSaving(true) on every
-  // draw event (which would cascade React re-renders through the entire context tree).
+  // Gates setSaving(true) so we don't cascade re-renders through the entire context tree
+  // on every individual draw stroke.
   const isSavingRef = useRef(false)
 
-  // Keep activeBoardRef in sync with state
+  // Keep activeBoardRef in sync with React state
   useEffect(() => {
     activeBoardRef.current = activeBoard
   }, [activeBoard])
 
-  // Switch providers when user updates settings
+  // Switch storage providers (Settings panel)
   const setProviderName = (name: 'local' | 'google-drive') => {
     setProviderNameState(name)
     localStorage.setItem('whiteboard_storage_provider', name)
     const provider: StorageProvider = name === 'local' ? localProvider.current : gdProvider.current
     repositoryRef.current.setProvider(provider)
     refreshBoardsList()
-    // Close active board as provider changed
     setActiveBoard(null)
   }
 
-  // Refresh lists (does NOT touch the main loading spinner — that is only for board content load)
+  // Refresh the sidebar board list.
+  // Does NOT touch the loading spinner — loading is only for board CONTENT loads.
   const refreshBoardsList = async () => {
     try {
       const list = await repositoryRef.current.list()
@@ -77,21 +76,20 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }
 
-  // Load initial board list on mount (or when provider changes).
-  // Board content loading is handled entirely by CanvasPage via route params.
-  // We deliberately do NOT call selectBoard here to avoid racing with CanvasPage's own load.
+  // Load the initial board list on mount (or when provider changes).
+  // Board CONTENT loading is handled exclusively by CanvasPage via URL route params
+  // to avoid the race condition where both this effect and CanvasPage call selectBoard
+  // concurrently, causing multiple setLoading flips and canvas blanks.
   useEffect(() => {
     refreshBoardsList()
   }, [providerName])
 
-  // Select/Open a board
+  // Select / open a board by ID
   const selectBoard = async (id: string): Promise<Board | null> => {
-    console.log(`[BoardContext] selectBoard called for id=${id}`)
     setLoading(true)
     try {
       const board = await repositoryRef.current.load(id)
       if (board) {
-        console.log(`[BoardContext] selectBoard loaded board, elements type=${Array.isArray(board.elements) ? 'array('+board.elements.length+')' : typeof board.elements}, keys=${board.elements && !Array.isArray(board.elements) ? Object.keys(board.elements).length : 'n/a'}`)
         setActiveBoard(board)
         activeBoardRef.current = board
         localStorage.setItem('whiteboard_last_active_id', id)
@@ -102,12 +100,11 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.error(`Failed to load board ${id}:`, e)
       return null
     } finally {
-      console.log(`[BoardContext] selectBoard finally -> setLoading(false)`)
       setLoading(false)
     }
   }
 
-  // Create a new board
+  // Create a blank board (elements: null = Excalidraw starts with empty canvas)
   const createBoard = async (title: string): Promise<Board> => {
     const now = new Date().toISOString()
     const newBoard: Board = {
@@ -115,9 +112,8 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       title,
       createdAt: now,
       updatedAt: now,
-      elements: [],
+      elements: null,
     }
-    
     await repositoryRef.current.save(newBoard)
     await refreshBoardsList()
     setActiveBoard(newBoard)
@@ -162,17 +158,15 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return dup
   }
 
-  // Save active board elements with debouncing (auto-save)
-  const saveActiveBoardElements = (elements: any) => {
+  // Debounced auto-save — called from CanvasPage's onChange handler
+  const saveActiveBoardElements = (elements: ExcalidrawScene) => {
     const currentBoard = activeBoardRef.current
     if (!currentBoard) return
 
-    // Update active board ref in memory instantly (prevents high-frequency React re-renders while drawing)
-    const updatedBoard = { ...currentBoard, elements }
-    activeBoardRef.current = updatedBoard
+    // Update ref immediately so the next save timeout reads the latest scene
+    activeBoardRef.current = { ...currentBoard, elements }
 
-    // Only fire the React state update once per save cycle — not on every draw event.
-    // isSavingRef gates this so we don't cascade re-renders through BoardContext on every stroke.
+    // Fire setSaving(true) only once per save cycle to avoid per-stroke re-renders
     if (!isSavingRef.current) {
       isSavingRef.current = true
       setSaving(true)
@@ -190,12 +184,10 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             ...boardToSave,
             updatedAt: new Date().toISOString(),
           }
-          console.log(`[BoardContext] Drive save starting for board ${finalBoard.id}, elements keys=${finalBoard.elements && !Array.isArray(finalBoard.elements) ? Object.keys(finalBoard.elements).length : 'array/empty'}`)
           await repositoryRef.current.save(finalBoard)
-          console.log('[BoardContext] Drive save complete -> updating state')
-          // Keep ref current with the persisted updatedAt timestamp
           activeBoardRef.current = finalBoard
-          // Sync React state with the saved board using startTransition (low-priority batch).
+          // Use startTransition so the low-priority state update doesn't interrupt
+          // ongoing user interactions (strokes, panning, etc.)
           startTransition(() => {
             setActiveBoard(finalBoard)
             setBoards((prev) =>
@@ -208,13 +200,13 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.error('Failed to auto-save board elements:', e)
         } finally {
           isSavingRef.current = false
-          console.log('[BoardContext] setSaving(false)')
           setSaving(false)
         }
       }
-    }, 1000) // 1 second debounce
+    }, 1000)
   }
 
+  // Asset helpers (used by the import system for Drive-based asset storage)
   const downloadAsset = async (assetId: string): Promise<Blob> => {
     return repositoryRef.current.getProvider().downloadAsset(assetId)
   }
