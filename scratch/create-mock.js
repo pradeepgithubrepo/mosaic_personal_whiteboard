@@ -1,0 +1,41 @@
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+const scratchDir = __dirname;
+const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mock Whiteboard Export</title>
+</head>
+<body>
+  <h1>Mock Whiteboard</h1>
+  <!-- 1. Inline Image -->
+  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" style="position: absolute; left: 100px; top: 150px; width: 200px; height: 120px; transform: rotate(15deg);" />
+
+  <!-- 2. Inline Vector SVG -->
+  <svg viewBox="0 0 100 100" style="position: absolute; left: 400px; top: 200px; width: 300px; height: 300px; transform: rotate(90deg);">
+    <circle cx="50" cy="50" r="40" stroke="green" stroke-width="4" fill="yellow" />
+  </svg>
+
+  <!-- 3. Layout Div with Background Image -->
+  <div style="position: absolute; background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='); left: 150px; top: 600px; width: 64px; height: 64px;"></div>
+</body>
+</html>
+`;
+
+// Make sure jszip is installed in frontend so we can reuse it
+console.log('Writing mock HTML file...');
+fs.writeFileSync(path.join(scratchDir, 'Board.html'), htmlContent);
+
+// Zip the file using a simple archiver or JSZip
+console.log('Creating ZIP archive...');
+const JSZip = require('../frontend/node_modules/jszip');
+const zip = new JSZip();
+zip.file('Board.html', htmlContent);
+
+zip.generateAsync({ type: 'nodebuffer' }).then((buffer) => {
+  fs.writeFileSync(path.join(scratchDir, 'mock-board.zip'), buffer);
+  console.log('Mock ZIP package "mock-board.zip" created successfully!');
+});

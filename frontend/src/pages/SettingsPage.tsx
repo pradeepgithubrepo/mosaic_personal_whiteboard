@@ -585,6 +585,7 @@ ${validationLogs.join('\n')}
           </div>
         )}
 
+
         {/* Whiteboard Migration History Logs */}
         <div className="bg-white dark:bg-[#0f172a] border border-gray-200 dark:border-gray-800 rounded-3xl p-6 shadow-sm space-y-4">
           <div className="flex items-center justify-between">

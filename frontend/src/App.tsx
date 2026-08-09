@@ -8,12 +8,20 @@ import BoardsPage from './pages/BoardsPage'
 import SettingsPage from './pages/SettingsPage'
 import AboutPage from './pages/AboutPage'
 import AuthCallback from './pages/AuthCallback'
+import PasswordWall from './components/auth/PasswordWall'
 
 const AppContent: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [isAuthorized, setIsAuthorized] = useState(() => {
+    return localStorage.getItem('whiteboard_authorized') === 'true'
+  })
 
   const toggleSidebar = () => {
     setIsSidebarOpen((prev) => !prev)
+  }
+
+  if (!isAuthorized) {
+    return <PasswordWall onAuthorized={() => setIsAuthorized(true)} />
   }
 
   return (
