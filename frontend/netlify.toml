@@ -10,6 +10,18 @@
   force = true
 
 [[redirects]]
+  from = "/google-drive-upload/*"
+  to = "https://www.googleapis.com/upload/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/google-drive/*"
+  to = "https://www.googleapis.com/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200

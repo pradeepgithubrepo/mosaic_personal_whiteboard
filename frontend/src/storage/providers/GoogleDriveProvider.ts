@@ -8,6 +8,11 @@ interface CachedFolderIds {
   markerFileId: string
 }
 
+// Keep Drive requests same-origin. This avoids browser-specific CORS/network
+// failures while preserving the user's Bearer token on the proxied request.
+const DRIVE_API_BASE = '/google-drive/drive/v3'
+const DRIVE_UPLOAD_API_BASE = '/google-drive-upload/drive/v3'
+
 export class GoogleDriveProvider implements StorageProvider {
   public name = 'google-drive'
   private cachedFolders: CachedFolderIds | null = null
@@ -84,7 +89,13 @@ export class GoogleDriveProvider implements StorageProvider {
     headers.set('Authorization', `Bearer ${token}`)
     
     const reqOptions = { ...options, headers }
-    let res = await fetch(url, reqOptions)
+    let res: Response
+    try {
+      res = await fetch(url, reqOptions)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Unable to reach Google Drive through the application proxy: ${message}`)
+    }
 
     // Retry once if token refresh somehow didn't sync or token is stale on Google's end
     if (res.status === 401) {
@@ -93,7 +104,12 @@ export class GoogleDriveProvider implements StorageProvider {
       localStorage.setItem('whiteboard_oauth_expires_at', '0')
       const freshToken = await this.getValidToken()
       headers.set('Authorization', `Bearer ${freshToken}`)
-      res = await fetch(url, { ...options, headers })
+      try {
+        res = await fetch(url, { ...options, headers })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Unable to retry the Google Drive request through the application proxy: ${message}`)
+      }
     }
 
     if (!res.ok) {
@@ -115,7 +131,7 @@ export class GoogleDriveProvider implements StorageProvider {
       try {
         const parsed = JSON.parse(cached)
         // Verify root folder actually exists in Drive before returning
-        await this.apiCall(`https://www.googleapis.com/drive/v3/files/${parsed.rootFolderId}?fields=id`)
+        await this.apiCall(`${DRIVE_API_BASE}/files/${parsed.rootFolderId}?fields=id`)
         this.cachedFolders = parsed
         return parsed
       } catch {
@@ -136,7 +152,7 @@ export class GoogleDriveProvider implements StorageProvider {
     // List all non-trashed items inside the root folder
     const listQuery = encodeURIComponent(`'${rootFolderId}' in parents and trashed = false`)
     const listRes = await this.apiCall(
-      `https://www.googleapis.com/drive/v3/files?q=${listQuery}&fields=files(id,name,mimeType)&spaces=drive`
+      `${DRIVE_API_BASE}/files?q=${listQuery}&fields=files(id,name,mimeType)&spaces=drive`
     )
     const listData = await listRes.json()
     const items: Array<{ id: string; name: string; mimeType?: string }> = listData.files || []
@@ -199,7 +215,7 @@ export class GoogleDriveProvider implements StorageProvider {
       metadata.parents = [parentId]
     }
 
-    const res = await this.apiCall('https://www.googleapis.com/drive/v3/files', {
+    const res = await this.apiCall(`${DRIVE_API_BASE}/files`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(metadata),
@@ -235,7 +251,7 @@ export class GoogleDriveProvider implements StorageProvider {
       "name = 'Mosaic' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     )
     const folderRes = await this.apiCall(
-      `https://www.googleapis.com/drive/v3/files?q=${folderQuery}&fields=files(id,name)&spaces=drive`
+      `${DRIVE_API_BASE}/files?q=${folderQuery}&fields=files(id,name)&spaces=drive`
     )
     const folderData = await folderRes.json()
     const mosaicFolders = folderData.files || []
@@ -249,7 +265,7 @@ export class GoogleDriveProvider implements StorageProvider {
       "name = '.mosaic' and mimeType = 'application/json' and trashed = false"
     )
     const markerRes = await this.apiCall(
-      `https://www.googleapis.com/drive/v3/files?q=${markerQuery}&fields=files(id,parents)&spaces=drive`
+      `${DRIVE_API_BASE}/files?q=${markerQuery}&fields=files(id,parents)&spaces=drive`
     )
     const markerData = await markerRes.json()
     const markerFiles = markerData.files || []
@@ -301,7 +317,7 @@ export class GoogleDriveProvider implements StorageProvider {
     }
 
     const res = await this.apiCall(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+      `${DRIVE_UPLOAD_API_BASE}/files?uploadType=multipart`,
       {
         method: 'POST',
         headers: {
@@ -316,7 +332,7 @@ export class GoogleDriveProvider implements StorageProvider {
   }
 
   public async downloadFile(fileId: string): Promise<string> {
-    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`)
+    const res = await this.apiCall(`${DRIVE_API_BASE}/files/${fileId}?alt=media`)
     return res.text()
   }
 
@@ -336,7 +352,7 @@ export class GoogleDriveProvider implements StorageProvider {
     }
 
     await this.apiCall(
-      `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+      `${DRIVE_UPLOAD_API_BASE}/files/${fileId}?uploadType=media`,
       {
         method: 'PATCH',
         headers: {
@@ -348,7 +364,7 @@ export class GoogleDriveProvider implements StorageProvider {
   }
 
   public async deleteFile(fileId: string): Promise<void> {
-    await this.apiCall(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    await this.apiCall(`${DRIVE_API_BASE}/files/${fileId}`, {
       method: 'DELETE',
     })
   }
@@ -356,7 +372,7 @@ export class GoogleDriveProvider implements StorageProvider {
   public async listFiles(folderId: string): Promise<{ id: string; name: string }[]> {
     const query = encodeURIComponent(`'${folderId}' in parents and trashed = false`)
     const res = await this.apiCall(
-      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)&spaces=drive`
+      `${DRIVE_API_BASE}/files?q=${query}&fields=files(id,name)&spaces=drive`
     )
     const data = await res.json()
     return data.files || []
@@ -368,7 +384,7 @@ export class GoogleDriveProvider implements StorageProvider {
 
     // 1. Search for existing file containing the board's ID in the filename
     const query = encodeURIComponent(`'${boardsFolderId}' in parents and name contains '__${board.id}.json' and trashed = false`)
-    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name)`)
+    const res = await this.apiCall(`${DRIVE_API_BASE}/files?q=${query}&fields=files(id,name)`)
     const searchData = await res.json()
     const files = searchData.files || []
 
@@ -379,7 +395,7 @@ export class GoogleDriveProvider implements StorageProvider {
       const existingFile = files[0]
       // Rename if title changed
       if (existingFile.name !== targetFileName) {
-        await this.apiCall(`https://www.googleapis.com/drive/v3/files/${existingFile.id}`, {
+        await this.apiCall(`${DRIVE_API_BASE}/files/${existingFile.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: targetFileName }),
@@ -396,7 +412,7 @@ export class GoogleDriveProvider implements StorageProvider {
   public async loadBoard(id: string): Promise<Board | null> {
     const { boardsFolderId } = await this.initializeWorkspace()
     const query = encodeURIComponent(`'${boardsFolderId}' in parents and name contains '__${id}.json' and trashed = false`)
-    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id)`)
+    const res = await this.apiCall(`${DRIVE_API_BASE}/files?q=${query}&fields=files(id)`)
     const searchData = await res.json()
     const files = searchData.files || []
 
@@ -413,7 +429,7 @@ export class GoogleDriveProvider implements StorageProvider {
   public async deleteBoard(id: string): Promise<void> {
     const { boardsFolderId } = await this.initializeWorkspace()
     const query = encodeURIComponent(`'${boardsFolderId}' in parents and name contains '__${id}.json' and trashed = false`)
-    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id)`)
+    const res = await this.apiCall(`${DRIVE_API_BASE}/files?q=${query}&fields=files(id)`)
     const searchData = await res.json()
     const files = searchData.files || []
 
@@ -428,7 +444,7 @@ export class GoogleDriveProvider implements StorageProvider {
       const query = encodeURIComponent(`'${boardsFolderId}' in parents and name contains '__' and name contains '.json' and trashed = false`)
       
       const res = await this.apiCall(
-        `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,createdTime,modifiedTime)&spaces=drive`
+        `${DRIVE_API_BASE}/files?q=${query}&fields=files(id,name,createdTime,modifiedTime)&spaces=drive`
       )
       const data = await res.json()
       const files = data.files || []
@@ -483,7 +499,7 @@ export class GoogleDriveProvider implements StorageProvider {
         return new Blob([new Uint8Array(array)], { type: mimeType })
       }
     }
-    const res = await this.apiCall(`https://www.googleapis.com/drive/v3/files/${cleanId}?alt=media`)
+    const res = await this.apiCall(`${DRIVE_API_BASE}/files/${cleanId}?alt=media`)
     const contentType = res.headers.get('content-type')
     const rawBlob = await res.blob()
     if (!rawBlob.type || !rawBlob.type.startsWith('image/')) {

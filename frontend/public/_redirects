@@ -1,2 +1,4 @@
 /oauth2/*  https://oauth2.googleapis.com/:splat  200!
+/google-drive-upload/*  https://www.googleapis.com/upload/:splat  200!
+/google-drive/*  https://www.googleapis.com/:splat  200!
 /*         /index.html                           200
