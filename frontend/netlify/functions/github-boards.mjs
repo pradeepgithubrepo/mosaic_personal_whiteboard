@@ -1,7 +1,10 @@
 const DEFAULT_REPOSITORY = 'pradeepgithubrepo/mosaic_personal_whiteboard'
 const DEFAULT_BRANCH = 'master'
 const BOARDS_DIRECTORY = '.mosaic/boards'
+const ASSETS_DIRECTORY = '.mosaic/assets'
 const MAX_BOARD_BYTES = 900_000
+const MAX_ASSET_BYTES = 3_500_000
+const MAX_RAW_BOARD_BYTES = 5_000_000
 
 const json = (statusCode, body) => ({
   statusCode,
@@ -14,6 +17,12 @@ const githubPath = (path) => path.split('/').map(encodeURIComponent).join('/')
 const toBase64 = (value) => Buffer.from(value, 'utf8').toString('base64')
 
 const fromBase64 = (value) => Buffer.from(value.replace(/\n/g, ''), 'base64').toString('utf8')
+
+const badRequest = (message) => {
+  const error = new Error(message)
+  error.statusCode = 400
+  return error
+}
 
 const getConfig = () => {
   const token = process.env.git_fine_pat || process.env.GIT_FINE_PAT
@@ -54,21 +63,53 @@ const githubRequest = async (config, path, options = {}) => {
 
 const validateBoard = (board) => {
   if (!board || typeof board !== 'object' || typeof board.id !== 'string' || !/^[\w-]+$/.test(board.id)) {
-    throw new Error('Invalid board payload.')
+    throw badRequest('Invalid board payload.')
   }
   if (typeof board.title !== 'string' || !board.title.trim()) {
-    throw new Error('A board title is required.')
+    throw badRequest('A board title is required.')
+  }
+  if (Buffer.byteLength(JSON.stringify(board), 'utf8') > MAX_RAW_BOARD_BYTES) {
+    throw badRequest('This board exceeds the 5 MB GitHub sync request limit.')
   }
 
-  const serialized = JSON.stringify(board)
-  if (Buffer.byteLength(serialized, 'utf8') > MAX_BOARD_BYTES) {
-    throw new Error('This board is too large to commit through GitHub sync. Remove or reduce embedded media first.')
-  }
-
-  return serialized
+  return board
 }
 
 const boardPath = (id) => `${BOARDS_DIRECTORY}/${id}.json`
+const assetPath = (boardId, fileId) =>
+  `${ASSETS_DIRECTORY}/${boardId}/${fileId.replace(/[^\w-]/g, '_')}.base64`
+
+const splitDataUrl = (dataUrl) => {
+  const match = /^data:([^;,]+)(?:;[^,]+)*;base64,(.+)$/s.exec(dataUrl)
+  if (!match) throw badRequest('An embedded board asset is not a base64 data URL.')
+  return { mimeType: match[1], content: match[2].replace(/\s/g, '') }
+}
+
+const prepareBoardForCommit = (board) => {
+  const compactBoard = JSON.parse(JSON.stringify(board))
+  const assets = []
+
+  for (const [fileId, file] of Object.entries(compactBoard.elements?.files || {})) {
+    if (!file?.dataURL) continue
+
+    const { content } = splitDataUrl(file.dataURL)
+    if (Buffer.byteLength(content, 'base64') > MAX_ASSET_BYTES) {
+      throw badRequest(`Embedded asset ${fileId} exceeds the 3.5 MB GitHub sync limit.`)
+    }
+
+    const path = assetPath(compactBoard.id, fileId)
+    assets.push({ path, content })
+    delete file.dataURL
+    file.mosaicAssetPath = path
+  }
+
+  const serializedBoard = JSON.stringify(compactBoard)
+  if (Buffer.byteLength(serializedBoard, 'utf8') > MAX_BOARD_BYTES) {
+    throw badRequest('The board metadata is too large to commit through GitHub sync.')
+  }
+
+  return { serializedBoard, assets }
+}
 
 const readBoard = async (config, id) => {
   const file = await githubRequest(
@@ -76,6 +117,61 @@ const readBoard = async (config, id) => {
     `/contents/${githubPath(boardPath(id))}?ref=${encodeURIComponent(config.branch)}`
   )
   return { board: JSON.parse(fromBase64(file.content)), sha: file.sha }
+}
+
+const getBranchHead = async (config) => {
+  const ref = await githubRequest(config, `/git/ref/heads/${encodeURIComponent(config.branch)}`)
+  const commit = await githubRequest(config, `/git/commits/${ref.object.sha}`)
+  return { commitSha: ref.object.sha, treeSha: commit.tree.sha }
+}
+
+const createBlob = async (config, content) => {
+  const blob = await githubRequest(config, '/git/blobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, encoding: 'base64' }),
+  })
+  return blob.sha
+}
+
+const commitTree = async (config, message, entries) => {
+  const head = await getBranchHead(config)
+  const tree = await githubRequest(config, '/git/trees', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base_tree: head.treeSha, tree: entries }),
+  })
+  const commit = await githubRequest(config, '/git/commits', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, tree: tree.sha, parents: [head.commitSha] }),
+  })
+  try {
+    await githubRequest(config, `/git/refs/heads/${encodeURIComponent(config.branch)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sha: commit.sha, force: false }),
+    })
+  } catch (error) {
+    if (error.statusCode === 422) {
+      error.statusCode = 409
+      error.message = 'The GitHub branch changed while this board was being saved.'
+    }
+    throw error
+  }
+  return commit.sha
+}
+
+const readAsset = async (config, path) => {
+  if (!new RegExp(`^${ASSETS_DIRECTORY.replace('.', '\\.')}\\/[\\w-]+\\/[\\w-]+\\.base64$`).test(path)) {
+    throw badRequest('Invalid board asset path.')
+  }
+  const file = await githubRequest(
+    config,
+    `/contents/${githubPath(path)}?ref=${encodeURIComponent(config.branch)}`
+  )
+  const blob = await githubRequest(config, `/git/blobs/${file.sha}`)
+  return blob.content.replace(/\n/g, '')
 }
 
 const listBoards = async (config) => {
@@ -131,42 +227,42 @@ export const handler = async (event) => {
       return json(200, { board })
     }
 
-    if (request.action === 'commit') {
-      const content = validateBoard(request.board)
-      const path = boardPath(request.board.id)
-      let sha
-      try {
-        sha = (await readBoard(config, request.board.id)).sha
-      } catch (error) {
-        if (error.statusCode !== 404) throw error
-      }
+    if (request.action === 'loadAsset') {
+      return json(200, { content: await readAsset(config, request.path) })
+    }
 
-      const result = await githubRequest(config, `/contents/${githubPath(path)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: `mosaic: save ${request.board.title}`,
-          content: toBase64(content),
-          branch: config.branch,
-          ...(sha ? { sha } : {}),
-        }),
-      })
-      return json(200, { commitSha: result.commit.sha })
+    if (request.action === 'commit') {
+      const board = validateBoard(request.board)
+      const { serializedBoard, assets } = prepareBoardForCommit(board)
+      const assetEntries = await Promise.all(
+        assets.map(async (asset) => ({
+          path: asset.path,
+          mode: '100644',
+          type: 'blob',
+          sha: await createBlob(config, asset.content),
+        }))
+      )
+      const boardBlobSha = await createBlob(config, toBase64(serializedBoard))
+      const commitSha = await commitTree(config, `mosaic: save ${board.title}`, [
+        ...assetEntries,
+        { path: boardPath(board.id), mode: '100644', type: 'blob', sha: boardBlobSha },
+      ])
+      return json(200, { commitSha })
     }
 
     if (request.action === 'delete') {
       try {
-        const { sha } = await readBoard(config, request.id)
-        const result = await githubRequest(config, `/contents/${githubPath(boardPath(request.id))}`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: 'mosaic: delete board',
-            sha,
-            branch: config.branch,
-          }),
-        })
-        return json(200, { commitSha: result.commit.sha })
+        await readBoard(config, request.id)
+        const tree = await githubRequest(
+          config,
+          `/git/trees/${encodeURIComponent(config.branch)}?recursive=1`
+        )
+        const assetPrefix = `${ASSETS_DIRECTORY}/${request.id}/`
+        const deletions = (tree.tree || [])
+          .filter((entry) => entry.path === boardPath(request.id) || entry.path.startsWith(assetPrefix))
+          .map((entry) => ({ path: entry.path, mode: '100644', type: 'blob', sha: null }))
+        const commitSha = await commitTree(config, 'mosaic: delete board', deletions)
+        return json(200, { commitSha })
       } catch (error) {
         if (error.statusCode === 404) return json(200, { deleted: false })
         throw error

@@ -91,9 +91,11 @@ The **GitHub Repository** storage provider stages canvas updates in the browser.
 
 ```text
 .mosaic/boards/<board-id>.json
+.mosaic/assets/<board-id>/<asset-id>.base64
 ```
 
 The deployed Netlify site needs a server-side environment variable named `git_fine_pat`.
 Use a fine-grained GitHub token restricted to `pradeepgithubrepo/mosaic_personal_whiteboard`
 with **Contents: Read and write** permission. Do not add this token to a `VITE_` variable
-or any committed `.env` file.
+or any committed `.env` file. Image data is stored as separate Git blobs, keeping the board
+JSON within GitHub API limits.

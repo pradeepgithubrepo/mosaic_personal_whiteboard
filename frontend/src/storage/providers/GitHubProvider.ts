@@ -7,6 +7,7 @@ interface GitHubResponse {
   boards?: BoardHeader[]
   board?: Board
   commitSha?: string
+  content?: string
   error?: string
   conflict?: boolean
 }
@@ -67,13 +68,31 @@ export class GitHubProvider implements StorageProvider {
     return data.commitSha || ''
   }
 
+  private async hydrateBoardAssets(board: Board): Promise<Board> {
+    const files = board.elements?.files
+    if (!files) return board
+
+    await Promise.all(
+      Object.values(files).map(async (file: any) => {
+        if (!file?.mosaicAssetPath || file.dataURL) return
+        const data = await this.request({ action: 'loadAsset', path: file.mosaicAssetPath })
+        if (!data.content) {
+          throw new Error(`GitHub asset ${file.mosaicAssetPath} is empty.`)
+        }
+        file.dataURL = `data:${file.mimeType || 'application/octet-stream'};base64,${data.content}`
+      })
+    )
+
+    return board
+  }
+
   public async loadBoard(id: string): Promise<Board | null> {
     const staged = this.getStagedBoard(id)
     if (staged) return staged
 
     try {
       const data = await this.request({ action: 'load', id })
-      return data.board || null
+      return data.board ? this.hydrateBoardAssets(data.board) : null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (message.includes('(404)')) return null
