@@ -8,6 +8,7 @@ import { GitHubProvider } from './providers/GitHubProvider'
 interface BoardContextType {
   activeBoard: Board | null
   boards: BoardHeader[]
+  boardsLoaded: boolean
   loading: boolean
   saving: boolean
   providerName: string
@@ -49,9 +50,16 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   )
 
   const [boards, setBoards] = useState<BoardHeader[]>([])
+  // False until the board list for the current provider has been fetched (or failed),
+  // so the canvas can tell "still loading" apart from "this provider has no boards".
+  const [boardsLoaded, setBoardsLoaded] = useState(false)
+  // Ignores list responses from a provider the user has already switched away from.
+  const listRequestRef = useRef(0)
   const [activeBoard, setActiveBoard] = useState<Board | null>(null)
   const activeBoardRef = useRef<Board | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Only true while selectBoard is fetching. Starting at false matters: boards opened
+  // without selectBoard (e.g. createBoard) would otherwise never clear the spinner.
+  const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const saveTimeoutRef = useRef<number | null>(null)
   // Gates setSaving(true) so we don't cascade re-renders through the entire context tree
@@ -74,6 +82,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           ? gdProvider.current
           : githubProvider.current
     repositoryRef.current.setProvider(provider)
+    setBoardsLoaded(false)
     refreshBoardsList()
     setActiveBoard(null)
   }
@@ -81,12 +90,17 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Refresh the sidebar board list.
   // Does NOT touch the loading spinner — loading is only for board CONTENT loads.
   const refreshBoardsList = async () => {
+    const requestId = ++listRequestRef.current
     try {
       const list = await repositoryRef.current.list()
+      if (requestId !== listRequestRef.current) return
       setBoards(list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)))
     } catch (e) {
+      if (requestId !== listRequestRef.current) return
       console.error('Failed to load board list:', e)
       setBoards([])
+    } finally {
+      if (requestId === listRequestRef.current) setBoardsLoaded(true)
     }
   }
 
@@ -275,6 +289,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       value={{
         activeBoard,
         boards,
+        boardsLoaded,
         loading,
         saving,
         providerName,

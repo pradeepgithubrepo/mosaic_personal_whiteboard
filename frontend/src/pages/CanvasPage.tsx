@@ -70,6 +70,7 @@ export const CanvasPage: React.FC = () => {
     providerName,
     loading,
     boards,
+    boardsLoaded,
   } =
     useBoard()
   const { resolvedTheme } = useTheme()
@@ -79,6 +80,9 @@ export const CanvasPage: React.FC = () => {
   const [isCommitting, setIsCommitting] = useState(false)
   const [commitStatus, setCommitStatus] = useState<'idle' | 'success' | 'error'>('idle')
   const [commitError, setCommitError] = useState('')
+  // Board id from the URL that the provider could not find, so the empty state
+  // is shown instead of waiting for it forever.
+  const [missingId, setMissingId] = useState<string | null>(null)
 
   // Keep saveActiveBoardElements stable in ref so the debounced onChange
   // callback never goes stale without being recreated.
@@ -95,19 +99,25 @@ export const CanvasPage: React.FC = () => {
   // boards.length is intentionally excluded — sidebar list refreshes must NOT
   // trigger a board reload and cause a double-mount race.
   useEffect(() => {
-    if (id) {
-      if (!activeBoard || activeBoard.id !== id) {
-        selectBoard(id)
-      }
-    } else {
-      const lastActiveId = localStorage.getItem('whiteboard_last_active_id')
-      if (lastActiveId) {
-        navigate(`/board/${lastActiveId}`, { replace: true })
-      } else if (boards.length > 0) {
-        navigate(`/board/${boards[0].id}`, { replace: true })
-      }
+    if (id && (!activeBoard || activeBoard.id !== id)) {
+      selectBoard(id).then((board) => {
+        if (!board) setMissingId(id)
+      })
     }
   }, [id, activeBoard?.id])
+
+  // ─── Default board when no id is in the URL ──────────────────────────────
+  // Waits for the current provider's board list so the last active board is only
+  // reopened if it exists there (it may belong to a different provider). When the
+  // provider has no boards, the empty state is shown instead of a spinner.
+  useEffect(() => {
+    if (id || !boardsLoaded) return
+    const lastActiveId = localStorage.getItem('whiteboard_last_active_id')
+    const target = boards.find((board) => board.id === lastActiveId) ?? boards[0]
+    if (target) {
+      navigate(`/board/${target.id}`, { replace: true })
+    }
+  }, [id, boardsLoaded, boards])
 
   // ─── initialData ─────────────────────────────────────────────────────────
   // Passed to <Excalidraw initialData={...}> once on mount (key={activeBoard.id}
@@ -188,7 +198,10 @@ export const CanvasPage: React.FC = () => {
   }
 
   // ─── Loading state ───────────────────────────────────────────────────────
-  if (loading) {
+  // With an id, wait until that board is open (or known to be missing);
+  // without one, wait for the board list.
+  const waitingForBoard = !!id && (loading || (activeBoard?.id !== id && missingId !== id))
+  if (id ? waitingForBoard : !boardsLoaded) {
     return (
       <div className="flex-1 bg-white dark:bg-[#0b0f19] flex items-center justify-center">
         <div className="flex flex-col items-center space-y-4">
