@@ -95,7 +95,11 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({ onToggleSidebar, isSideb
                 <>
                   <CheckCircle className="w-3.5 h-3.5 text-emerald-500" />
                   <span className="hidden sm:inline">
-                    {providerName === 'local' ? 'Saved local' : 'Synced Drive'}
+                    {providerName === 'local'
+                      ? 'Saved local'
+                      : providerName === 'github'
+                        ? 'Ready to commit'
+                        : 'Synced Drive'}
                   </span>
                 </>
               )}

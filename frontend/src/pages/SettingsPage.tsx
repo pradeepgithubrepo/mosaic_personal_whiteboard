@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { HardDrive, Moon, Sun, Monitor, Check, ShieldCheck, RefreshCw, LogOut, Play, CheckCircle, XCircle, FileText, Download, Layers } from 'lucide-react'
+import { HardDrive, Moon, Sun, Monitor, Check, ShieldCheck, RefreshCw, LogOut, Play, CheckCircle, XCircle, FileText, Download, Layers, Github } from 'lucide-react'
 import { useBoard } from '../hooks/useBoard'
 import { useTheme, Theme } from '../hooks/useTheme'
 import { GoogleDriveProvider } from '../storage/providers/GoogleDriveProvider'
@@ -378,7 +378,7 @@ ${validationLogs.join('\n')}
             Connect and synchronize boards to LocalStorage or your Google Drive folder.
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
             <button
               onClick={() => setProviderName('local')}
               className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
@@ -401,6 +401,32 @@ ${validationLogs.join('\n')}
                 <h4 className="font-bold text-sm text-gray-900 dark:text-white">Local Storage</h4>
                 <p className="text-[11px] text-gray-450 dark:text-gray-400 mt-1">
                   Saves whiteboard boards inside LocalStorage. Quick and requires no accounts.
+                </p>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setProviderName('github')}
+              className={`p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                providerName === 'github'
+                  ? 'border-indigo-600 bg-indigo-50/10 dark:bg-indigo-950/10'
+                  : 'border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-850'
+              }`}
+            >
+              <div className="flex items-center justify-between w-full">
+                <div className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200">
+                  <Github className="w-5 h-5" />
+                </div>
+                {providerName === 'github' && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
+                    Active
+                  </span>
+                )}
+              </div>
+              <div className="mt-4">
+                <h4 className="font-bold text-sm text-gray-900 dark:text-white">GitHub Repository</h4>
+                <p className="text-[11px] text-gray-450 dark:text-gray-400 mt-1">
+                  Stages boards locally and commits them to this Mosaic repository when you save from the canvas.
                 </p>
               </div>
             </button>

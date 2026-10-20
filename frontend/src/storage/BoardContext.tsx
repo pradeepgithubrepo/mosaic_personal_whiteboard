@@ -3,6 +3,7 @@ import { Board, BoardHeader, ExcalidrawScene, StorageProvider } from '../types'
 import { BoardRepository } from './BoardRepository'
 import { LocalProvider } from './providers/LocalProvider'
 import { GoogleDriveProvider } from './providers/GoogleDriveProvider'
+import { GitHubProvider } from './providers/GitHubProvider'
 
 interface BoardContextType {
   activeBoard: Board | null
@@ -10,13 +11,14 @@ interface BoardContextType {
   loading: boolean
   saving: boolean
   providerName: string
-  setProviderName: (name: 'local' | 'google-drive') => void
+  setProviderName: (name: 'local' | 'google-drive' | 'github') => void
   selectBoard: (id: string) => Promise<Board | null>
   createBoard: (title: string) => Promise<Board>
   renameBoard: (id: string, title: string) => Promise<void>
   deleteBoard: (id: string) => Promise<void>
   duplicateBoard: (id: string, newTitle?: string) => Promise<Board>
   saveActiveBoardElements: (elements: any) => void
+  commitActiveBoard: (elements?: ExcalidrawScene) => Promise<void>
   refreshBoardsList: () => Promise<void>
   repository: BoardRepository
   // Asset helpers kept for ImportModal / importers that still need Drive asset storage
@@ -27,16 +29,23 @@ interface BoardContextType {
 const BoardContext = createContext<BoardContextType | undefined>(undefined)
 
 export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [providerName, setProviderNameState] = useState<'local' | 'google-drive'>(() => {
+  const [providerName, setProviderNameState] = useState<'local' | 'google-drive' | 'github'>(() => {
     const saved = localStorage.getItem('whiteboard_storage_provider')
-    return (saved as 'local' | 'google-drive') || 'local'
+    return (saved as 'local' | 'google-drive' | 'github') || 'local'
   })
 
   const localProvider = useRef(new LocalProvider())
   const gdProvider = useRef(new GoogleDriveProvider())
+  const githubProvider = useRef(new GitHubProvider())
 
   const repositoryRef = useRef<BoardRepository>(
-    new BoardRepository(providerName === 'local' ? localProvider.current : gdProvider.current)
+    new BoardRepository(
+      providerName === 'local'
+        ? localProvider.current
+        : providerName === 'google-drive'
+          ? gdProvider.current
+          : githubProvider.current
+    )
   )
 
   const [boards, setBoards] = useState<BoardHeader[]>([])
@@ -55,10 +64,15 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [activeBoard])
 
   // Switch storage providers (Settings panel)
-  const setProviderName = (name: 'local' | 'google-drive') => {
+  const setProviderName = (name: 'local' | 'google-drive' | 'github') => {
     setProviderNameState(name)
     localStorage.setItem('whiteboard_storage_provider', name)
-    const provider: StorageProvider = name === 'local' ? localProvider.current : gdProvider.current
+    const provider: StorageProvider =
+      name === 'local'
+        ? localProvider.current
+        : name === 'google-drive'
+          ? gdProvider.current
+          : githubProvider.current
     repositoryRef.current.setProvider(provider)
     refreshBoardsList()
     setActiveBoard(null)
@@ -206,6 +220,47 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, 1000)
   }
 
+  const commitActiveBoard = async (elements?: ExcalidrawScene): Promise<void> => {
+    const currentBoard = activeBoardRef.current
+    if (!currentBoard) {
+      throw new Error('No active board to commit.')
+    }
+    if (!(repositoryRef.current.getProvider() instanceof GitHubProvider)) {
+      throw new Error('Select GitHub Repository storage before committing a board.')
+    }
+
+    if (saveTimeoutRef.current) {
+      window.clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = null
+    }
+
+    const boardToCommit: Board = {
+      ...currentBoard,
+      ...(elements ? { elements } : {}),
+      updatedAt: new Date().toISOString(),
+    }
+
+    isSavingRef.current = true
+    setSaving(true)
+    try {
+      // Stage first so a failed commit remains recoverable in this browser.
+      await repositoryRef.current.save(boardToCommit)
+      await githubProvider.current.commitBoard(boardToCommit)
+      activeBoardRef.current = boardToCommit
+      setActiveBoard(boardToCommit)
+      setBoards((previous) =>
+        previous.map((board) =>
+          board.id === boardToCommit.id
+            ? { ...board, updatedAt: boardToCommit.updatedAt, title: boardToCommit.title }
+            : board
+        )
+      )
+    } finally {
+      isSavingRef.current = false
+      setSaving(false)
+    }
+  }
+
   // Asset helpers (used by the import system for Drive-based asset storage)
   const downloadAsset = async (assetId: string): Promise<Blob> => {
     return repositoryRef.current.getProvider().downloadAsset(assetId)
@@ -230,6 +285,7 @@ export const BoardProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         deleteBoard,
         duplicateBoard,
         saveActiveBoardElements,
+        commitActiveBoard,
         refreshBoardsList,
         repository: repositoryRef.current,
         downloadAsset,

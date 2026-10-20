@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Excalidraw } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
-import { Plus, MousePointer } from 'lucide-react'
+import { Plus, MousePointer, Save, AlertCircle, CheckCircle2, LoaderCircle } from 'lucide-react'
 import { useBoard } from '../hooks/useBoard'
 import { useTheme } from '../hooks/useTheme'
 import type { ExcalidrawScene } from '../types'
@@ -61,12 +61,24 @@ function hasSceneChanged(
 export const CanvasPage: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { activeBoard, selectBoard, createBoard, saveActiveBoardElements, loading, boards } =
+  const {
+    activeBoard,
+    selectBoard,
+    createBoard,
+    saveActiveBoardElements,
+    commitActiveBoard,
+    providerName,
+    loading,
+    boards,
+  } =
     useBoard()
   const { resolvedTheme } = useTheme()
 
   // Imperative API ref — available if we ever need programmatic scene control
   const excalidrawAPIRef = useRef<ExcalidrawImperativeAPI | null>(null)
+  const [isCommitting, setIsCommitting] = useState(false)
+  const [commitStatus, setCommitStatus] = useState<'idle' | 'success' | 'error'>('idle')
+  const [commitError, setCommitError] = useState('')
 
   // Keep saveActiveBoardElements stable in ref so the debounced onChange
   // callback never goes stale without being recreated.
@@ -146,6 +158,35 @@ export const CanvasPage: React.FC = () => {
     navigate(`/board/${newBoard.id}`)
   }
 
+  const handleCommitToGitHub = async () => {
+    const api = excalidrawAPIRef.current
+    if (!api) return
+
+    const appState = api.getAppState()
+    const scene: ExcalidrawScene = {
+      elements: [...api.getSceneElements()],
+      appState: {
+        viewBackgroundColor: appState.viewBackgroundColor ?? '#ffffff',
+        gridSize: appState.gridSize ?? null,
+        theme: appState.theme ?? 'light',
+      },
+      files: api.getFiles() ?? {},
+    }
+
+    setIsCommitting(true)
+    setCommitStatus('idle')
+    setCommitError('')
+    try {
+      await commitActiveBoard(scene)
+      setCommitStatus('success')
+    } catch (error) {
+      setCommitStatus('error')
+      setCommitError(error instanceof Error ? error.message : 'Unable to commit this board to GitHub.')
+    } finally {
+      setIsCommitting(false)
+    }
+  }
+
   // ─── Loading state ───────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -187,6 +228,29 @@ export const CanvasPage: React.FC = () => {
   // ensuring initialData is re-applied cleanly for the new board.
   return (
     <div className="flex-1 relative h-full w-full" key={activeBoard.id}>
+      {providerName === 'github' && (
+        <div className="absolute z-10 top-4 right-4 flex flex-col items-end gap-2">
+          <button
+            onClick={handleCommitToGitHub}
+            disabled={isCommitting}
+            className="py-2 px-3 bg-gray-900 hover:bg-gray-800 disabled:opacity-60 text-white rounded-lg text-xs font-bold shadow-lg cursor-pointer flex items-center gap-1.5 dark:bg-white dark:hover:bg-gray-100 dark:text-gray-900"
+            title="Commit the current board to the Mosaic GitHub repository"
+          >
+            {isCommitting ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            <span>{isCommitting ? 'Committing…' : 'Save to GitHub'}</span>
+          </button>
+          {commitStatus === 'success' && (
+            <span className="px-2 py-1 rounded bg-emerald-600 text-white text-[11px] font-medium shadow flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Committed to GitHub
+            </span>
+          )}
+          {commitStatus === 'error' && (
+            <span className="max-w-xs px-2 py-1 rounded bg-red-600 text-white text-[11px] font-medium shadow flex items-start gap-1">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {commitError}
+            </span>
+          )}
+        </div>
+      )}
       <Excalidraw
         excalidrawAPI={(api) => { excalidrawAPIRef.current = api }}
         initialData={initialData}
