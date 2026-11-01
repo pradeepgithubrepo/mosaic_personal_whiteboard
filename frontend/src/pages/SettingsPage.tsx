@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { HardDrive, Moon, Sun, Monitor, Check, ShieldCheck, RefreshCw, LogOut, Play, CheckCircle, XCircle, FileText, Download, Layers, Github } from 'lucide-react'
+import { HardDrive, Moon, Sun, Monitor, Check, ShieldCheck, RefreshCw, LogOut, Play, CheckCircle, XCircle, FileText, Download, Layers, GitBranch } from 'lucide-react'
 import { useBoard } from '../hooks/useBoard'
 import { useTheme, Theme } from '../hooks/useTheme'
 import { GoogleDriveProvider } from '../storage/providers/GoogleDriveProvider'
@@ -415,7 +415,7 @@ ${validationLogs.join('\n')}
             >
               <div className="flex items-center justify-between w-full">
                 <div className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200">
-                  <Github className="w-5 h-5" />
+                  <GitBranch className="w-5 h-5" />
                 </div>
                 {providerName === 'github' && (
                   <span className="px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">
